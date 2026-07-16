@@ -3,12 +3,6 @@
 #   - Created prob_convexity_trend signal module.
 #   - Implemented prob_convexity_trend_signal per INTERFACE.md and the
 #     "prob_convexity_trend" section of STRATEGY_SPECS.md.
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Add Wave 1 standalone BTC 5m UP/DOWN signal to the new_signals package.
 
 """
@@ -117,7 +111,7 @@ def prob_convexity_trend_signal(
                 signal_price, source, f"prob not lagging above strike: {prob:.3f}"
             )
         direction = "YES"
-        entry_price = float(yes_ask if yes_ask is not None else yp_f)  # taker fill at ask
+        entry_price = kwargs.get("yes_ask", yp_f)
         prob_factor = (0.6 - prob) / 0.6
         reason = (
             f"spot above strike by {dist:+.4%} with lagging prob {prob:.3f}; "
@@ -130,7 +124,7 @@ def prob_convexity_trend_signal(
                 signal_price, source, f"prob not lagging below strike: {prob:.3f}"
             )
         direction = "NO"
-        entry_price = float(no_ask if no_ask is not None else np_f)  # taker fill at ask
+        entry_price = kwargs.get("no_ask", np_f)
         prob_factor = (prob - 0.4) / 0.6
         reason = (
             f"spot below strike by {dist:+.4%} with lagging prob {prob:.3f}; "

@@ -6,12 +6,6 @@
 #     buy NO when spot is clearly below strike and NO is cheap.
 #   - Applies INTERFACE time guards (rem_sec > 5, elapsed_sec > 5) and
 #     entry price cap (0.05 <= entry_price <= 0.85).
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Deliver a standalone Polymarket BTC 5m up/down signal per STRATEGY_SPECS.md.
 
 """
@@ -104,7 +98,7 @@ def expiry_convergence_90_300_signal(
 
     if dist > threshold:
         direction = "YES"
-        entry_price = float(yes_ask if yes_ask is not None else yp)  # taker fill at ask
+        entry_price = kwargs.get("yes_ask", yp)
         if 0.05 <= entry_price <= 0.85:
             triggered = True
             # Confidence scales linearly with distance, capped at 1.0.
@@ -119,7 +113,7 @@ def expiry_convergence_90_300_signal(
             )
     elif dist < -threshold:
         direction = "NO"
-        entry_price = float(no_ask if no_ask is not None else np_val)  # taker fill at ask
+        entry_price = kwargs.get("no_ask", np_val)
         if 0.05 <= entry_price <= 0.85:
             triggered = True
             confidence = min(abs_dist / threshold, 1.0)

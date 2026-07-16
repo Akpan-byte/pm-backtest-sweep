@@ -6,12 +6,6 @@
 #   - Always returns triggered=False; provides direction/confidence for a meta sizer.
 #   - Applies INTERFACE.md time guards (rem_sec/elapsed_sec > 5) and entry-price cap
 #     (0.05 <= entry_price <= 0.85).
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Provide a lightweight sizing helper that exposes Kronos forecast agreement
 #      without firing standalone trades.
 
@@ -167,10 +161,10 @@ def kronos_agreement_sizing_signal(**kwargs):
 
     if pred_close > up_threshold:
         direction = "YES"
-        entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry_price = kwargs.get("yes_ask", yp)
     elif pred_close < down_threshold:
         direction = "NO"
-        entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
+        entry_price = kwargs.get("no_ask", np_val)
     else:
         return _neutral(
             spot_price,

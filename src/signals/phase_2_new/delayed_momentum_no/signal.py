@@ -4,12 +4,6 @@
 #   - last 3 ticks all down -> NO
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -52,7 +46,7 @@ def delayed_momentum_no_signal(**kwargs: Any) -> Dict[str, Any]:
         return _neutral(spot_price, "insufficient spot history", source)
     last = spot_history[-4:]
     if all(last[i] < last[i-1] for i in range(1, 4)) and np_val <= 0.80:
-        entry = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
+        entry = kwargs.get("no_ask", np_val)
         if 0.05 <= entry <= 0.85:
             ret = (last[-1] - last[0]) / last[0] if last[0] != 0 else 0.0
             return {

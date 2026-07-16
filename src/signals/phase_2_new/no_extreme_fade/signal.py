@@ -4,12 +4,6 @@
 #   - np >= 0.90 with yp <= 0.85 -> YES fade
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -49,7 +43,7 @@ def no_extreme_fade_signal(**kwargs: Any) -> Dict[str, Any]:
         return _neutral(spot_price, "time guard", source)
 
     if np_val >= 0.90 and yp <= 0.85:
-        entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry = kwargs.get("yes_ask", yp)
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "YES",

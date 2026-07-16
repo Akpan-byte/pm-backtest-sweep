@@ -1,9 +1,15 @@
 # CHANGE_SUMMARY
 # 2026-07-16  assistant
-#   - Created strike_distance_yes signal module per INTERFACE.md and the active wave-2 strategy plan.
-#   - spot > strike +10bps and yp <= 0.75 -> YES
+#   - Created yes_extreme_fade signal module per INTERFACE.md and the active wave-2 strategy plan.
+#   - yp >= 0.90 with np <= 0.85 -> NO fade
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -25,8 +31,8 @@ def _neutral(spot_price: float, reason: str, source: str) -> Dict[str, Any]:
 
 
 
-def strike_distance_yes_signal(**kwargs: Any) -> Dict[str, Any]:
-    """Simple 5m BTC up/down signal: spot > strike +10bps and yp <= 0.75 -> YES"""
+def yes_extreme_fade_signal(**kwargs: Any) -> Dict[str, Any]:
+    """Simple 5m BTC up/down signal: yp >= 0.90 with np <= 0.85 -> NO fade"""
     spot_price = float(kwargs.get("spot_price", 0.0))
     strike = float(kwargs.get("strike", 0.0))
     rem_sec = float(kwargs.get("rem_sec", 0.0))
@@ -36,24 +42,21 @@ def strike_distance_yes_signal(**kwargs: Any) -> Dict[str, Any]:
     spot_history: List[float] = kwargs.get("spot_history", [])
     yp_history: List[float] = kwargs.get("yp_history", [])
     np_history: List[float] = kwargs.get("np_history", [])
-    source = "STRIKE_DISTANCE_YES"
+    source = "YES_EXTREME_FADE"
 
     # Time guard: do not trade in the first or last 5 seconds.
     if rem_sec <= 5.0 or elapsed_sec <= 5.0:
         return _neutral(spot_price, "time guard", source)
 
-    if strike <= 0.0:
-        return _neutral(spot_price, "invalid strike", source)
-    dist = (spot_price - strike) / strike
-    if dist > 0.001 and yp <= 0.75:
-        entry = kwargs.get("yes_ask", yp)
+    if yp >= 0.90 and np_val <= 0.85:
+        entry = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
         if 0.05 <= entry <= 0.85:
             return {
-                "triggered": True, "direction": "YES",
-                "confidence": min(1.0, max(0.0, dist / 0.003)),
+                "triggered": True, "direction": "NO",
+                "confidence": min(1.0, max(0.0, (yp - 0.90) / 0.10)),
                 "signal_price": spot_price, "entry_price": entry,
                 "source": source,
-                "reason": f"spot {spot_price:.2f} {dist:.5f} above strike {strike:.2f}",
+                "reason": f"yp extreme {yp:.3f}, fading to NO at np {np_val:.3f}",
             }
     return _neutral(spot_price, "no signal", source)
 

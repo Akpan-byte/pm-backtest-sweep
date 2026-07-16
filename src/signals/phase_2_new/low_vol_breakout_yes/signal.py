@@ -4,12 +4,6 @@
 #   - 10t vol < 0.5x 30t vol and 10-tick high -> YES
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -71,7 +65,7 @@ def low_vol_breakout_yes_signal(**kwargs: Any) -> Dict[str, Any]:
     if vol30 <= 0.0:
         return _neutral(spot_price, "zero prior vol", source)
     if vol10 < vol30 * 0.5 and spot_price >= max(spot_history[-10:]):
-        entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry = kwargs.get("yes_ask", yp)
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "YES",

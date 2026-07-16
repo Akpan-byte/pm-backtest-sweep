@@ -2,12 +2,6 @@
 # 2026-07-16  kilo
 #   - Created noise_signal_decomp signal module per INTERFACE.md and STRATEGY_SPECS.md.
 #   - Implements fast/slow EMA pullback crossover logic with time and entry-price guards.
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Provide a standalone Polymarket BTC 5m signal that trades trend pullbacks.
 
 """Noise vs signal decomposition signal for Polymarket BTC 5m up/down markets.
@@ -107,11 +101,11 @@ def noise_signal_decomp_signal(**kwargs) -> Dict[str, Any]:
 
     if slow_rising and crossed_above:
         direction = "YES"
-        entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry_price = kwargs.get("yes_ask", yp)
         reason = "slow EMA rising and fast EMA crossed back above slow EMA"
     elif slow_falling and crossed_below:
         direction = "NO"
-        entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
+        entry_price = kwargs.get("no_ask", np_val)
         reason = "slow EMA falling and fast EMA crossed back below slow EMA"
     else:
         return _neutral(spot_price, reason)

@@ -3,12 +3,6 @@
 #   - Created vol_compression_breakout signal module.
 #   - Implements ATR compression/expansion breakout logic per STRATEGY_SPECS.md.
 #   - Tracks per-market compression tick count in _STATE.
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Adds a standalone Polymarket BTC 5m signal that fires after volatility
 #      compression followed by directional expansion.
 
@@ -109,10 +103,10 @@ def vol_compression_breakout_signal(**kwargs) -> Dict[str, Any]:
     position = (spot_price - low3) / expansion
     if position >= 0.7:
         direction = "YES"
-        entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry_price = kwargs.get("yes_ask", yp)
     elif position <= 0.3:
         direction = "NO"
-        entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
+        entry_price = kwargs.get("no_ask", np_val)
     else:
         return _neutral(spot_price, "expansion direction unclear")
 

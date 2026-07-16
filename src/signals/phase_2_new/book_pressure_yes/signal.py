@@ -4,12 +4,6 @@
 #   - yp rising faster than np falling over 3 ticks -> YES
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -53,7 +47,7 @@ def book_pressure_yes_signal(**kwargs: Any) -> Dict[str, Any]:
     yp_inc = yp_history[-1] - yp_history[-4]
     np_dec = np_history[-4] - np_history[-1]
     if yp_inc > np_dec * 1.1 and yp <= 0.80:
-        entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry = kwargs.get("yes_ask", yp)
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "YES",

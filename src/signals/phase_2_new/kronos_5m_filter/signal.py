@@ -4,12 +4,6 @@
 #   - Loads /tmp/kronos_forecasts_5m.parquet once at import; returns neutral if missing.
 #   - Triggers YES/NO when the precomputed 5m close forecast diverges from spot
 #     beyond the thresholds defined in the spec, subject to time/price guards.
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Provides a standalone Kronos-mini forecast filter signal for Polymarket
 #      BTC 5m UP/DOWN markets.
 
@@ -133,11 +127,11 @@ def kronos_5m_filter_signal(**kwargs) -> Dict[str, Any]:
     # Determine direction from forecast vs spot.
     if predicted_close > spot_price * 1.0001:
         direction = "YES"
-        entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry_price = kwargs.get("yes_ask", yp)
         threshold_desc = "predicted close > spot * 1.0001"
     elif predicted_close < spot_price * 0.9999:
         direction = "NO"
-        entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
+        entry_price = kwargs.get("no_ask", np_val)
         threshold_desc = "predicted close < spot * 0.9999"
     else:
         return _neutral("forecast within neutral band around spot", spot_price)

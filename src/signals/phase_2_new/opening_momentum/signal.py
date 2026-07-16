@@ -4,12 +4,6 @@
 #   - elapsed <= 60s, direction of first 3 ticks, entry <= 0.80
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
-# 2026-07-16  kilo
-#   - Switched entry_price to the ask side for taker fills:
-#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
-#     (fallback to np_val) when ask is missing or invalid.
-#   - The [0.05, 0.85] entry-price guard is unchanged.
-#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -56,7 +50,7 @@ def opening_momentum_signal(**kwargs: Any) -> Dict[str, Any]:
     ups = all(first3[i] > first3[i-1] for i in range(1, 4))
     downs = all(first3[i] < first3[i-1] for i in range(1, 4))
     if ups and yp <= 0.80:
-        entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
+        entry = kwargs.get("yes_ask", yp)
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "YES",
@@ -66,7 +60,7 @@ def opening_momentum_signal(**kwargs: Any) -> Dict[str, Any]:
                 "reason": f"first 3 ticks up at elapsed {elapsed_sec:.1f}s",
             }
     if downs and np_val <= 0.80:
-        entry = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
+        entry = kwargs.get("no_ask", np_val)
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "NO",
