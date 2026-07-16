@@ -4,6 +4,12 @@
 #   - spot above strike +20bps and yp <= 0.80 -> YES
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -45,7 +51,7 @@ def spot_above_strike_yes_signal(**kwargs: Any) -> Dict[str, Any]:
     if strike <= 0.0:
         return _neutral(spot_price, "invalid strike", source)
     if spot_price > strike * 1.0002 and yp <= 0.80:
-        entry = yp
+        entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
         if 0.05 <= entry <= 0.85:
             dist = (spot_price - strike) / strike
             return {

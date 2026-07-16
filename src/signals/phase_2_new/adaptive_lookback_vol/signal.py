@@ -5,6 +5,12 @@
 #   - High-vol regime (top 25%): follow 5-tick high/low momentum breakouts.
 #   - Low-vol regime (bottom 25%): fade spot extremes using a 20-tick z-score > 1.5.
 #   - Respects time guard (rem_sec/elapsed_sec > 5) and entry-price cap [0.05, 0.85].
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Implements the adaptive_lookback_vol strategy for Polymarket BTC 5m up/down
 #      markets, keeping all state local and avoiding network calls.
 
@@ -136,13 +142,13 @@ def adaptive_lookback_vol_signal(**kwargs: Any) -> Dict[str, Any]:
         window = spot_history[-_BREAKOUT_LOOKBACK:]
         if spot_price >= max(window):
             direction = "YES"
-            entry_price = yp
+            entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
             ret_5 = (spot_price - window[0]) / window[0] if window[0] != 0.0 else 0.0
             confidence = min(1.0, max(0.0, abs(ret_5) / 0.001))
             reason = f"high vol 5-tick high breakout (vol={vol:.6f})"
         elif spot_price <= min(window):
             direction = "NO"
-            entry_price = np_val
+            entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
             ret_5 = (spot_price - window[0]) / window[0] if window[0] != 0.0 else 0.0
             confidence = min(1.0, max(0.0, abs(ret_5) / 0.001))
             reason = f"high vol 5-tick low breakout (vol={vol:.6f})"
@@ -161,12 +167,12 @@ def adaptive_lookback_vol_signal(**kwargs: Any) -> Dict[str, Any]:
         z = (spot_price - mean) / std
         if z > _Z_SCORE_THRESHOLD:
             direction = "NO"
-            entry_price = np_val
+            entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
             confidence = min(1.0, max(0.0, (z - _Z_SCORE_THRESHOLD) / _Z_SCORE_THRESHOLD))
             reason = f"low vol z-score fade high (z={z:.3f})"
         elif z < -_Z_SCORE_THRESHOLD:
             direction = "YES"
-            entry_price = yp
+            entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
             confidence = min(1.0, max(0.0, (abs(z) - _Z_SCORE_THRESHOLD) / _Z_SCORE_THRESHOLD))
             reason = f"low vol z-score fade low (z={z:.3f})"
         else:

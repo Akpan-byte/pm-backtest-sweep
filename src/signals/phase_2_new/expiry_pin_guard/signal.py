@@ -4,6 +4,12 @@
 #   - Negative filter for BTC 5m UP/DOWN Polymarket markets inside the last 90s.
 #   - Blocks entry when spot is within 0.0003 (relative) of the strike (pin-risk guard).
 #   - Standalone signal never triggers; intended as a composite gate.
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Provide a reusable guard module that prevents entries near expiry when
 #      spot is hovering at the strike and pin risk / chop is highest.
 

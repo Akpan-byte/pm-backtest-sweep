@@ -7,6 +7,12 @@
 #     20-tick spot highs/lows with fixed 0.5 confidence.
 #   - Enforces time guard (rem_sec <= 5 or elapsed_sec <= 5) and entry price
 #     cap (0.05 <= entry_price <= 0.85).
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Deliver a self-contained, offline-safe 5m BTC up/down signal module.
 
 """Time-of-day bias signal for Polymarket BTC 5m UP/DOWN markets."""
@@ -124,20 +130,20 @@ def time_of_day_bias_signal(**kwargs) -> Dict[str, Any]:
     if wtype == "breakout":
         if new_high:
             direction = "YES"
-            entry_price = yp
+            entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
             reason = f"ET {hour:.2f} breakout window, new 20-tick high"
         elif new_low:
             direction = "NO"
-            entry_price = np_val
+            entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
             reason = f"ET {hour:.2f} breakout window, new 20-tick low"
     else:  # mean_reversion
         if new_high:
             direction = "NO"
-            entry_price = np_val
+            entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
             reason = f"ET {hour:.2f} mean-reversion window, fade new 20-tick high"
         elif new_low:
             direction = "YES"
-            entry_price = yp
+            entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
             reason = f"ET {hour:.2f} mean-reversion window, fade new 20-tick low"
 
     if direction is None:

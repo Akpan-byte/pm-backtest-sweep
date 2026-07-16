@@ -4,6 +4,12 @@
 #   - 10t vol > 2x 30t vol with yp/np extreme -> fade
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -66,7 +72,7 @@ def high_vol_fade_signal(**kwargs: Any) -> Dict[str, Any]:
         return _neutral(spot_price, "zero prior vol", source)
     if vol10 > vol30 * 2.0:
         if yp > 0.85 and np_val <= 0.85:
-            entry = np_val
+            entry = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
             if 0.05 <= entry <= 0.85:
                 return {
                     "triggered": True, "direction": "NO",
@@ -76,7 +82,7 @@ def high_vol_fade_signal(**kwargs: Any) -> Dict[str, Any]:
                     "reason": f"vol spike {vol10:.6f}>{vol30*2:.6f}, fade extreme yp {yp:.3f}",
                 }
         if np_val > 0.85 and yp <= 0.85:
-            entry = yp
+            entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
             if 0.05 <= entry <= 0.85:
                 return {
                     "triggered": True, "direction": "YES",

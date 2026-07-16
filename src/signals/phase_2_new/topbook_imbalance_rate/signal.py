@@ -8,6 +8,12 @@
 #     np_val <= 0.80.
 #   - Confidence scales with the magnitude of the size change relative to the
 #     recent average size.
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Implements the topbook_imbalance_rate strategy spec from
 #      /config/new_signals/STRATEGY_SPECS.md.
 
@@ -118,7 +124,7 @@ def topbook_imbalance_rate_signal(
     if all(d > 0 for d in recent_ub_deltas) and yp <= 0.80:
         sum_d_ub = sum(recent_ub_deltas)
         if avg_ub > 0 and sum_d_ub > _STRONG_FRAC * avg_ub:
-            entry_price = float(yp)
+            entry_price = float(yes_ask if yes_ask is not None else yp)  # taker fill at ask
             if 0.05 <= entry_price <= 0.85:
                 confidence = min(1.0, sum_d_ub / (_CONFIDENCE_FRAC * avg_ub))
                 return {
@@ -138,7 +144,7 @@ def topbook_imbalance_rate_signal(
     if all(d > 0 for d in recent_da_deltas) and np_val <= 0.80:
         sum_d_da = sum(recent_da_deltas)
         if avg_da > 0 and sum_d_da > _STRONG_FRAC * avg_da:
-            entry_price = float(np_val)
+            entry_price = float(no_ask if no_ask is not None else np_val)  # taker fill at ask
             if 0.05 <= entry_price <= 0.85:
                 confidence = min(1.0, sum_d_da / (_CONFIDENCE_FRAC * avg_da))
                 return {

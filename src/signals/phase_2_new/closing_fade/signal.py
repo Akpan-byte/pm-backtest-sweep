@@ -4,6 +4,12 @@
 #   - rem <= 60s, fade last 3 ticks, entry <= 0.80
 #   - Respects the standard time guard (no trade in first/last 5s) and entry-price
 #     cap [0.05, 0.85].
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Wave-1 strategies were mostly too restrictive and produced zero trades. This
 #      module is intentionally simple so it actually fires on realistic 5m BTC data.
 from typing import Any, Dict, List
@@ -50,7 +56,7 @@ def closing_fade_signal(**kwargs: Any) -> Dict[str, Any]:
     ups = all(last[i] > last[i-1] for i in range(1, 4))
     downs = all(last[i] < last[i-1] for i in range(1, 4))
     if ups and np_val <= 0.80:
-        entry = np_val
+        entry = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "NO",
@@ -60,7 +66,7 @@ def closing_fade_signal(**kwargs: Any) -> Dict[str, Any]:
                 "reason": f"last 3 ticks up near expiry, fading NO",
             }
     if downs and yp <= 0.80:
-        entry = yp
+        entry = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
         if 0.05 <= entry <= 0.85:
             return {
                 "triggered": True, "direction": "YES",

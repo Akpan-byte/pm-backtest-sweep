@@ -6,6 +6,12 @@
 #   - Interprets "fade" as fading the recent probability move when it is
 #     disproportionately large relative to the realized prob/spot slope near
 #     probability extremes (prob > 0.65 -> fade NO; prob < 0.35 -> fade YES).
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Add Wave 1 standalone BTC 5m UP/DOWN signal to the new_signals package.
 
 """
@@ -175,7 +181,7 @@ def prob_convexity_fade_signal(
 
     if prob > PROB_HIGH and recent_prob_slope > 0:
         direction = "NO"
-        entry_price = np_f
+        entry_price = float(no_ask if no_ask is not None else np_f)  # taker fill at ask
         prob_factor = (prob - PROB_HIGH) / (1.0 - PROB_HIGH)
         reason = (
             f"prob={prob:.3f} > {PROB_HIGH} with upward overreaction "
@@ -183,7 +189,7 @@ def prob_convexity_fade_signal(
         )
     elif prob < PROB_LOW and recent_prob_slope < 0:
         direction = "YES"
-        entry_price = yp_f
+        entry_price = float(yes_ask if yes_ask is not None else yp_f)  # taker fill at ask
         prob_factor = (PROB_LOW - prob) / PROB_LOW
         reason = (
             f"prob={prob:.3f} < {PROB_LOW} with downward overreaction "

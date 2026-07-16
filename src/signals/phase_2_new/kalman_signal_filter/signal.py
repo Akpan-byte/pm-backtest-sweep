@@ -4,6 +4,12 @@
 #   - Implements a per-market exponential-Kalman trend estimate (alpha=0.15).
 #   - Triggers YES when spot is clearly above the filtered trend and NO when below,
 #     subject to time guard, entry-price cap, and strategy-specific <=0.80 threshold.
+# 2026-07-16  kilo
+#   - Switched entry_price to the ask side for taker fills:
+#     YES direction uses yes_ask (fallback to yp), NO direction uses no_ask
+#     (fallback to np_val) when ask is missing or invalid.
+#   - The [0.05, 0.85] entry-price guard is unchanged.
+#
 # WHY: Adds a standalone 5m BTC up/down signal that trades trend deviations from a
 #      smoothed spot estimate while keeping all state local and avoiding network calls.
 
@@ -67,7 +73,7 @@ def kalman_signal_filter_signal(**kwargs: Any) -> Dict[str, Any]:
 
     # YES: spot clearly above filtered trend.
     if spot_price > estimate * 1.0002:
-        entry_price = yp
+        entry_price = float(kwargs.get("yes_ask", yp) or yp)  # taker fill at ask
         if 0.05 <= entry_price <= 0.80:
             deviation = (spot_price / estimate) - 1.0
             confidence = min(1.0, max(0.0, deviation / 0.002))
@@ -88,7 +94,7 @@ def kalman_signal_filter_signal(**kwargs: Any) -> Dict[str, Any]:
 
     # NO: spot clearly below filtered trend.
     if spot_price < estimate * 0.9998:
-        entry_price = np_val
+        entry_price = float(kwargs.get("no_ask", np_val) or np_val)  # taker fill at ask
         if 0.05 <= entry_price <= 0.80:
             deviation = 1.0 - (spot_price / estimate)
             confidence = min(1.0, max(0.0, deviation / 0.002))
