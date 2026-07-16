@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 20
       matrix:
         strategy:
           - prob_convexity_fade
@@ -29,8 +30,9 @@ jobs:
           - noise_signal_decomp
           - kronos_5m_filter
           - kronos_agreement_sizing
+        fill: [taker, maker]
 
-    name: screen-${{ matrix.strategy }}
+    name: screen-${{ matrix.strategy }}-${{ matrix.fill }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -49,29 +51,29 @@ jobs:
           ls -ld /tmp/btc5m_compact
           wc -l is_files_2k.txt
 
-      - name: Run backtest for ${{ matrix.strategy }}
+      - name: Run backtest for ${{ matrix.strategy }} (${{ matrix.fill }})
         env:
           BT_EXTRA_STRATEGIES: new_strategy_registry.json
-          BT_IS_DIR: is_taker
+          BT_IS_DIR: is_${{ matrix.fill }}
         run: |
-          mkdir -p results/is_taker
+          mkdir -p results/is_${{ matrix.fill }}
           python3 run_is.py \
             --files is_files_2k.txt \
             --workers 4 \
             --only ${{ matrix.strategy }} \
             --compact \
-            --fill taker
+            --fill ${{ matrix.fill }}
 
       - name: Upload summary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: summary-${{ matrix.strategy }}
-          path: results/is_taker/${{ matrix.strategy }}.summary.json
+          name: summary-${{ matrix.strategy }}-${{ matrix.fill }}
+          path: results/is_${{ matrix.fill }}/${{ matrix.strategy }}.summary.json
           if-no-files-found: error
 
       - name: Upload trades artifact
         uses: actions/upload-artifact@v4
         with:
-          name: trades-${{ matrix.strategy }}
-          path: results/is_taker/${{ matrix.strategy }}.trades.jsonl.gz
+          name: trades-${{ matrix.strategy }}-${{ matrix.fill }}
+          path: results/is_${{ matrix.fill }}/${{ matrix.strategy }}.trades.jsonl.gz
           if-no-files-found: warn
