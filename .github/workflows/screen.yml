@@ -45,7 +45,7 @@ jobs:
 
       - name: Extract 2k sample dataset
         run: |
-          sudo tar -xzf sample_2k.tar.gz -C /
+          tar -xzf sample_2k.tar.gz --strip-components=1 -C /tmp
           ls -ld /tmp/btc5m_compact
           wc -l is_files_2k.txt
 
