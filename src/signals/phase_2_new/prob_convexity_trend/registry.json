@@ -1,0 +1,23 @@
+{
+  "name": "prob_convexity_trend",
+  "module": "phase_2.prob_convexity_trend",
+  "fn": "prob_convexity_trend_signal",
+  "params": {
+    "spot_price": 0,
+    "strike": 0,
+    "rem_sec": 0,
+    "elapsed_sec": 0,
+    "duration_sec": 0,
+    "yp": 0,
+    "np_val": 0,
+    "yes_ask": 0,
+    "no_ask": 0,
+    "spot_history": [],
+    "yp_history": [],
+    "np_history": [],
+    "tf_hint": "5m",
+    "market_id": "",
+    "start_date_iso": ""
+  },
+  "tf_hint": "5m"
+}

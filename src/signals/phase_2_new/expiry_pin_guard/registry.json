@@ -1,0 +1,25 @@
+{
+  "name": "expiry_pin_guard",
+  "module": "phase_2.expiry_pin_guard",
+  "fn": "expiry_pin_guard_signal",
+  "source": "EXPIRY_PIN_GUARD",
+  "tf_hint": "5m",
+  "description": "Near-expiry pin-risk guard for Polymarket BTC 5m up/down markets. Blocks entry when spot is within 0.0003 of the strike. Standalone negative filter intended for composite signals.",
+  "params": [
+    "spot_price",
+    "strike",
+    "rem_sec",
+    "elapsed_sec",
+    "duration_sec",
+    "yp",
+    "np_val",
+    "yes_ask",
+    "no_ask",
+    "spot_history",
+    "yp_history",
+    "np_history",
+    "tf_hint",
+    "market_id",
+    "start_date_iso"
+  ]
+}

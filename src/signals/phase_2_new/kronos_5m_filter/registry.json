@@ -1,0 +1,23 @@
+{
+  "name": "kronos_5m_filter",
+  "module": "phase_2.kronos_5m_filter",
+  "fn": "kronos_5m_filter_signal",
+  "tf_hint": "5m",
+  "params": {
+    "spot_price": "float",
+    "strike": "float",
+    "rem_sec": "float",
+    "elapsed_sec": "float",
+    "duration_sec": "float",
+    "yp": "float",
+    "np_val": "float",
+    "yes_ask": "float",
+    "no_ask": "float",
+    "spot_history": "list",
+    "yp_history": "list",
+    "np_history": "list",
+    "tf_hint": "str",
+    "market_id": "str",
+    "start_date_iso": "str"
+  }
+}

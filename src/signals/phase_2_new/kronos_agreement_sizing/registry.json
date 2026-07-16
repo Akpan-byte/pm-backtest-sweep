@@ -1,0 +1,25 @@
+{
+  "name": "kronos_agreement_sizing",
+  "module": "phase_2.kronos_agreement_sizing",
+  "fn": "kronos_agreement_sizing_signal",
+  "source": "KRONOS_AGREEMENT_SIZING",
+  "tf_hint": "5m",
+  "description": "Kronos forecast agreement sizing helper for Polymarket BTC 5m up/down markets. Loads /tmp/kronos_forecasts_5m.parquet at import time and returns forecast direction/confidence for a meta sizer; never triggers standalone trades.",
+  "params": [
+    "spot_price",
+    "strike",
+    "rem_sec",
+    "elapsed_sec",
+    "duration_sec",
+    "yp",
+    "np_val",
+    "yes_ask",
+    "no_ask",
+    "spot_history",
+    "yp_history",
+    "np_history",
+    "tf_hint",
+    "market_id",
+    "start_date_iso"
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "module": "phase_2.spot_shock_overreaction",
+  "fn": "spot_shock_overreaction_signal",
+  "params": [
+    "spot_price",
+    "rem_sec",
+    "elapsed_sec",
+    "yp",
+    "np_val",
+    "spot_history",
+    "tf_hint",
+    "market_id",
+    "start_date_iso"
+  ],
+  "tf_hint": "5m"
+}

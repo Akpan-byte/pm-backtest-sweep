@@ -1,0 +1,23 @@
+{
+  "name": "expiry_convergence_90_300",
+  "module": "phase_2.expiry_convergence_90_300",
+  "fn": "expiry_convergence_90_300_signal",
+  "params": [
+    "spot_price",
+    "strike",
+    "rem_sec",
+    "elapsed_sec",
+    "duration_sec",
+    "yp",
+    "np_val",
+    "yes_ask",
+    "no_ask",
+    "spot_history",
+    "yp_history",
+    "np_history",
+    "tf_hint",
+    "market_id",
+    "start_date_iso"
+  ],
+  "tf_hint": "5m"
+}

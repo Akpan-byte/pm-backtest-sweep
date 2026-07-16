@@ -1,0 +1,16 @@
+{
+  "name": "topbook_imbalance_rate",
+  "module": "phase_2.topbook_imbalance_rate",
+  "fn": "topbook_imbalance_rate_signal",
+  "params": [
+    "spot_price",
+    "rem_sec",
+    "elapsed_sec",
+    "yp",
+    "np_val",
+    "market_id",
+    "ub",
+    "da"
+  ],
+  "tf_hint": "5m"
+}

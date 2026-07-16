@@ -1,0 +1,23 @@
+{
+  "name": "adaptive_lookback_vol",
+  "module": "phase_2.adaptive_lookback_vol",
+  "fn": "adaptive_lookback_vol_signal",
+  "source": "ADAPTIVE_LOOKBACK_VOL",
+  "tf_hint": "5m",
+  "description": "Adaptive lookback volatility signal for Polymarket BTC 5m up/down markets. Switches between a 5-tick momentum breakout in high-vol regimes and a 20-tick z-score fade in low-vol regimes.",
+  "params": {
+    "spot_price": {"type": "float", "required": true},
+    "strike": {"type": "float", "required": true},
+    "rem_sec": {"type": "float", "required": true},
+    "elapsed_sec": {"type": "float", "required": true},
+    "yp": {"type": "float", "required": true},
+    "np_val": {"type": "float", "required": true},
+    "spot_history": {"type": "list", "required": true},
+    "market_id": {"type": "str", "required": true},
+    "vol_lookback": {"type": "int", "default": 20},
+    "breakout_lookback": {"type": "int", "default": 5},
+    "fade_lookback": {"type": "int", "default": 20},
+    "z_score_threshold": {"type": "float", "default": 1.5},
+    "vol_history_max": {"type": "int", "default": 100}
+  }
+}

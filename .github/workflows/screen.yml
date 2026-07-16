@@ -1,0 +1,70 @@
+name: screen
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        strategy:
+          - prob_convexity_fade
+          - prob_convexity_trend
+          - expiry_convergence_90_300
+          - expiry_pin_guard
+          - spot_shock_overreaction
+          - topbook_imbalance_rate
+          - time_of_day_bias
+          - adaptive_lookback_vol
+          - vol_compression_breakout
+          - kalman_signal_filter
+          - noise_signal_decomp
+          - kronos_5m_filter
+          - kronos_agreement_sizing
+
+    name: screen-${{ matrix.strategy }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract 2k sample dataset
+        run: |
+          sudo tar -xzf sample_2k.tar.gz -C /
+          ls -ld /tmp/btc5m_compact
+          wc -l is_files_2k.txt
+
+      - name: Run backtest for ${{ matrix.strategy }}
+        env:
+          BT_EXTRA_STRATEGIES: new_strategy_registry.json
+          BT_IS_DIR: is_taker
+        run: |
+          mkdir -p results/is_taker
+          python3 run_is.py \
+            --files is_files_2k.txt \
+            --workers 2 \
+            --only ${{ matrix.strategy }} \
+            --compact \
+            --fill taker
+
+      - name: Upload summary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-${{ matrix.strategy }}
+          path: results/is_taker/${{ matrix.strategy }}.summary.json
+          if-no-files-found: error

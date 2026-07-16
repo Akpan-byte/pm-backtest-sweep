@@ -1,0 +1,24 @@
+{
+  "name": "noise_signal_decomp",
+  "module": "phase_2.noise_signal_decomp",
+  "fn": "noise_signal_decomp_signal",
+  "params": [
+    "spot_price",
+    "strike",
+    "rem_sec",
+    "elapsed_sec",
+    "duration_sec",
+    "yp",
+    "np_val",
+    "yes_ask",
+    "no_ask",
+    "spot_history",
+    "yp_history",
+    "np_history",
+    "tf_hint",
+    "market_id",
+    "start_date_iso"
+  ],
+  "tf_hint": "5m",
+  "description": "Decompose spot into fast noise and slow signal using two EMAs. Trade when fast noise pulls back toward the slow signal in the direction of the slow trend."
+}

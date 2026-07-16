@@ -1,0 +1,11 @@
+# Mirrored from /home/akpan/backtest/.venv_x86 for the GitHub Actions screen.
+numpy==2.5.1
+pandas==3.0.3
+python-dateutil==2.9.0.post0
+six==1.17.0
+requests==2.34.2
+certifi==2026.6.17
+charset-normalizer==3.4.9
+idna==3.18
+urllib3==2.7.0
+redis==8.0.1

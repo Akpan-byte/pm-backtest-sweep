@@ -1,0 +1,19 @@
+{
+  "name": "kalman_signal_filter",
+  "module": "phase_2.kalman_signal_filter",
+  "fn": "kalman_signal_filter_signal",
+  "tf_hint": "5m",
+  "params": {
+    "spot_price": {"type": "float", "required": true},
+    "yp": {"type": "float", "required": true},
+    "np_val": {"type": "float", "required": true},
+    "rem_sec": {"type": "float", "required": true},
+    "elapsed_sec": {"type": "float", "required": true},
+    "market_id": {"type": "str", "required": true},
+    "alpha": {"type": "float", "default": 0.15},
+    "upper_threshold": {"type": "float", "default": 1.0002},
+    "lower_threshold": {"type": "float", "default": 0.9998},
+    "max_entry": {"type": "float", "default": 0.80},
+    "min_entry": {"type": "float", "default": 0.05}
+  }
+}

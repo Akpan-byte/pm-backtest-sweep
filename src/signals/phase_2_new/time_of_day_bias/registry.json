@@ -1,0 +1,23 @@
+{
+  "strategy": "time_of_day_bias",
+  "module": "phase_2.time_of_day_bias",
+  "fn": "time_of_day_bias_signal",
+  "params": {
+    "spot_price": null,
+    "strike": null,
+    "rem_sec": null,
+    "elapsed_sec": null,
+    "duration_sec": null,
+    "yp": null,
+    "np_val": null,
+    "yes_ask": null,
+    "no_ask": null,
+    "spot_history": [],
+    "yp_history": [],
+    "np_history": [],
+    "tf_hint": "5m",
+    "market_id": null,
+    "start_date_iso": null
+  },
+  "tf_hint": "5m"
+}
