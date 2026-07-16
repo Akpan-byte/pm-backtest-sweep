@@ -1,0 +1,15 @@
+{
+ "strategy": "prob_convexity_fade",
+ "family": "per_snapshot",
+ "module": "phase_2_new.prob_convexity_fade",
+ "n_markets": 5,
+ "n_closed": 0,
+ "n_active_left": 0,
+ "total_pnl": 0,
+ "cash": 200.0,
+ "committed": 0,
+ "equity": 200.0,
+ "start_capital": 200.0,
+ "pnl_pct": 0.0,
+ "runtime_s": 0.4
+}
