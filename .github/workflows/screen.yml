@@ -30,6 +30,28 @@ jobs:
           - noise_signal_decomp
           - kronos_5m_filter
           - kronos_agreement_sizing
+          - spot_above_strike_yes
+          - spot_below_strike_no
+          - momentum_5t_yes
+          - momentum_5t_no
+          - mean_reversion_5t_yes
+          - mean_reversion_5t_no
+          - yes_extreme_fade
+          - no_extreme_fade
+          - opening_momentum
+          - closing_fade
+          - volatility_breakout_yes
+          - volatility_breakout_no
+          - book_pressure_yes
+          - book_pressure_no
+          - strike_distance_yes
+          - strike_distance_no
+          - delayed_momentum_yes
+          - delayed_momentum_no
+          - high_vol_fade
+          - low_vol_breakout_yes
+          - consecutive_yes
+          - consecutive_no
         fill: [taker, maker]
 
     name: screen-${{ matrix.strategy }}-${{ matrix.fill }}
