@@ -57,7 +57,7 @@ jobs:
           mkdir -p results/is_taker
           python3 run_is.py \
             --files is_files_2k.txt \
-            --workers 2 \
+            --workers 4 \
             --only ${{ matrix.strategy }} \
             --compact \
             --fill taker
@@ -68,3 +68,10 @@ jobs:
           name: summary-${{ matrix.strategy }}
           path: results/is_taker/${{ matrix.strategy }}.summary.json
           if-no-files-found: error
+
+      - name: Upload trades artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trades-${{ matrix.strategy }}
+          path: results/is_taker/${{ matrix.strategy }}.trades.jsonl.gz
+          if-no-files-found: warn
