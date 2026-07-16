@@ -1,0 +1,24 @@
+{
+  "low_vol_breakout_yes": {
+    "module": "phase_2_new.low_vol_breakout_yes",
+    "fn": "low_vol_breakout_yes_signal",
+    "params": [
+      "spot_price",
+      "strike",
+      "rem_sec",
+      "elapsed_sec",
+      "duration_sec",
+      "yp",
+      "np_val",
+      "yes_ask",
+      "no_ask",
+      "spot_history",
+      "yp_history",
+      "np_history",
+      "tf_hint",
+      "market_id",
+      "start_date_iso"
+    ],
+    "tf_hint": "5m"
+  }
+}

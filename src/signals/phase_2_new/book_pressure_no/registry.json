@@ -1,0 +1,24 @@
+{
+  "book_pressure_no": {
+    "module": "phase_2_new.book_pressure_no",
+    "fn": "book_pressure_no_signal",
+    "params": [
+      "spot_price",
+      "strike",
+      "rem_sec",
+      "elapsed_sec",
+      "duration_sec",
+      "yp",
+      "np_val",
+      "yes_ask",
+      "no_ask",
+      "spot_history",
+      "yp_history",
+      "np_history",
+      "tf_hint",
+      "market_id",
+      "start_date_iso"
+    ],
+    "tf_hint": "5m"
+  }
+}
