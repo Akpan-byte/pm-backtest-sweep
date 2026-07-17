@@ -15,28 +15,28 @@ jobs:
       max-parallel: 20
       matrix:
         batch:
-          - trend_sweep_batches/batch_00.txt
-          - trend_sweep_batches/batch_01.txt
-          - trend_sweep_batches/batch_02.txt
-          - trend_sweep_batches/batch_03.txt
-          - trend_sweep_batches/batch_04.txt
-          - trend_sweep_batches/batch_05.txt
-          - trend_sweep_batches/batch_06.txt
-          - trend_sweep_batches/batch_07.txt
-          - trend_sweep_batches/batch_08.txt
-          - trend_sweep_batches/batch_09.txt
-          - trend_sweep_batches/batch_10.txt
-          - trend_sweep_batches/batch_11.txt
-          - trend_sweep_batches/batch_12.txt
-          - trend_sweep_batches/batch_13.txt
-          - trend_sweep_batches/batch_14.txt
-          - trend_sweep_batches/batch_15.txt
-          - trend_sweep_batches/batch_16.txt
-          - trend_sweep_batches/batch_17.txt
-          - trend_sweep_batches/batch_18.txt
-          - trend_sweep_batches/batch_19.txt
+          - 00
+          - 01
+          - 02
+          - 03
+          - 04
+          - 05
+          - 06
+          - 07
+          - 08
+          - 09
+          - 10
+          - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
 
-    name: sweep-${{ matrix.batch }}
+    name: sweep-batch-${{ matrix.batch }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
           BT_IS_DIR: trend_sweep_taker
         run: |
           mkdir -p results/trend_sweep_taker
-          only=$(cat ${{ matrix.batch }})
+          only=$(cat trend_sweep_batches/batch_${{ matrix.batch }}.txt)
           python3 run_is.py \
             --files is_files_2k.txt \
             --workers 4 \
@@ -72,13 +72,13 @@ jobs:
       - name: Upload batch summaries
         uses: actions/upload-artifact@v4
         with:
-          name: trend-sweep-${{ replace(matrix.batch, '/', '-') }}
+          name: trend-sweep-batch-${{ matrix.batch }}
           path: results/trend_sweep_taker/*.summary.json
           if-no-files-found: error
 
       - name: Upload batch trades
         uses: actions/upload-artifact@v4
         with:
-          name: trend-sweep-trades-${{ replace(matrix.batch, '/', '-') }}
+          name: trend-sweep-trades-batch-${{ matrix.batch }}
           path: results/trend_sweep_taker/*.trades.jsonl.gz
           if-no-files-found: ignore
