@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 14
+      max-parallel: 7
       matrix:
         batch:
           - trend_sweep_batches/batch_00.txt
@@ -22,13 +22,6 @@ jobs:
           - trend_sweep_batches/batch_04.txt
           - trend_sweep_batches/batch_05.txt
           - trend_sweep_batches/batch_06.txt
-          - trend_sweep_batches/batch_07.txt
-          - trend_sweep_batches/batch_08.txt
-          - trend_sweep_batches/batch_09.txt
-          - trend_sweep_batches/batch_10.txt
-          - trend_sweep_batches/batch_11.txt
-          - trend_sweep_batches/batch_12.txt
-          - trend_sweep_batches/batch_13.txt
 
     name: sweep-${{ matrix.batch }}
     steps:
