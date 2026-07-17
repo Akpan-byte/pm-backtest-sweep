@@ -234,46 +234,6 @@ def _polyreg3(arr: np.ndarray, p: Dict[str, Any]) -> float:
     return float(np.polyval(coefs, len(arr) - 1))
 
 
-@_register("theilsen")
-def _theilsen(arr: np.ndarray, p: Dict[str, Any]) -> float:
-    x = np.arange(len(arr))
-    slopes = []
-    for i in range(len(arr)):
-        for j in range(i + 1, len(arr)):
-            if x[j] != x[i]:
-                slopes.append((arr[j] - arr[i]) / (x[j] - x[i]))
-    if not slopes:
-        return float(arr[-1])
-    m = float(np.median(slopes))
-    return float(arr[-1] + m * 0)  # intercept at current x
-
-
-@_register("ransac")
-def _ransac(arr: np.ndarray, p: Dict[str, Any]) -> float:
-    x = np.arange(len(arr))
-    A = np.vstack([x, np.ones(len(arr))]).T
-    best_inliers = None
-    best_model = None
-    trials = int(p.get("ransac_trials", 20))
-    thresh = float(p.get("ransac_thresh", 50.0))
-    for _ in range(trials):
-        idx = np.random.choice(len(arr), 2, replace=False)
-        x_s, y_s = x[idx], arr[idx]
-        if x_s[1] == x_s[0]:
-            continue
-        m = (y_s[1] - y_s[0]) / (x_s[1] - x_s[0])
-        c = y_s[0] - m * x_s[0]
-        pred = m * x + c
-        inliers = np.abs(pred - arr) < thresh
-        if best_inliers is None or np.sum(inliers) > np.sum(best_inliers):
-            best_inliers = inliers
-            best_model = (m, c)
-    if best_model is None:
-        return float(arr[-1])
-    m, c = best_model
-    return float(m * (len(arr) - 1) + c)
-
-
 # ---------------------------------------------------------------------------
 # 5. Filters
 # ---------------------------------------------------------------------------
@@ -285,20 +245,6 @@ def _gaussian(arr: np.ndarray, p: Dict[str, Any]) -> float:
     weights = np.exp(-0.5 * ((x - (n - 1)) / sigma) ** 2)
     weights /= weights.sum()
     return float(np.sum(arr * weights))
-
-
-@_register("savgol")
-def _savgol(arr: np.ndarray, p: Dict[str, Any]) -> float:
-    n = len(arr)
-    if n < 5:
-        return float(np.mean(arr))
-    window = n if n % 2 == 1 else n - 1
-    polyorder = min(3, window - 1)
-    try:
-        from scipy.signal import savgol_filter
-        return float(savgol_filter(arr, window, polyorder)[-1])
-    except Exception:
-        return float(np.mean(arr))
 
 
 @_register("median")
@@ -314,22 +260,6 @@ def _butterworth(arr: np.ndarray, p: Dict[str, Any]) -> float:
     for x in arr[1:]:
         est = est + alpha * (x - est)
     return float(est)
-
-
-@_register("hp_filter")
-def _hp_filter(arr: np.ndarray, p: Dict[str, Any]) -> float:
-    lamb = float(p.get("hp_lambda", 100.0))
-    n = len(arr)
-    if n < 3:
-        return float(arr[-1])
-    # simplified HP: second-order difference penalty
-    I = np.eye(n)
-    D = np.diff(I, n=2, axis=0)
-    try:
-        trend = np.linalg.solve(I + lamb * D.T @ D, arr)
-        return float(trend[-1])
-    except Exception:
-        return float(arr[-1])
 
 
 # ---------------------------------------------------------------------------
@@ -527,18 +457,6 @@ def _ridge_regression(arr: np.ndarray, p: Dict[str, Any]) -> float:
         return float(arr[-1])
 
 
-@_register("huber_regression")
-def _huber_regression(arr: np.ndarray, p: Dict[str, Any]) -> float:
-    try:
-        from sklearn.linear_model import HuberRegressor
-        x = np.arange(len(arr)).reshape(-1, 1)
-        model = HuberRegressor(epsilon=float(p.get("huber_epsilon", 1.35)), max_iter=100)
-        model.fit(x, arr)
-        return float(model.predict([[len(arr) - 1]])[0])
-    except Exception:
-        return _linreg(arr, p)
-
-
 @_register("perceptron_trend")
 def _perceptron_trend(arr: np.ndarray, p: Dict[str, Any]) -> float:
     lr = float(p.get("perceptron_lr", 0.01))
@@ -551,21 +469,6 @@ def _perceptron_trend(arr: np.ndarray, p: Dict[str, Any]) -> float:
         w += lr * err * x
         b += lr * err
     return float(w * (len(arr) - 1) + b)
-
-
-@_register("recursive_least_squares")
-def _recursive_least_squares(arr: np.ndarray, p: Dict[str, Any]) -> float:
-    lamb = float(p.get("rls_forget", 0.99))
-    P = np.eye(2) * 1000
-    theta = np.array([0.0, arr[0]])
-    for i in range(len(arr)):
-        x = np.array([i, 1.0])
-        y = arr[i]
-        denom = lamb + x @ P @ x
-        K = P @ x / denom
-        theta = theta + K * (y - x @ theta)
-        P = (np.eye(2) - np.outer(K, x)) @ P / lamb
-    return float(theta @ np.array([len(arr) - 1, 1.0]))
 
 
 @_register("holt")

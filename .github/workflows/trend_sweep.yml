@@ -72,13 +72,13 @@ jobs:
       - name: Upload batch summaries
         uses: actions/upload-artifact@v4
         with:
-          name: trend-sweep-${{ matrix.batch }}
+          name: trend-sweep-${{ replace(matrix.batch, '/', '-') }}
           path: results/trend_sweep_taker/*.summary.json
           if-no-files-found: error
 
       - name: Upload batch trades
         uses: actions/upload-artifact@v4
         with:
-          name: trend-sweep-trades-${{ matrix.batch }}
+          name: trend-sweep-trades-${{ replace(matrix.batch, '/', '-') }}
           path: results/trend_sweep_taker/*.trades.jsonl.gz
           if-no-files-found: ignore
