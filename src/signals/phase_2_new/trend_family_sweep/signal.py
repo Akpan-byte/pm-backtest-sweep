@@ -604,13 +604,16 @@ def trend_family_signal(**kwargs: Any) -> Dict[str, Any]:
     market_id = str(kwargs.get("market_id", ""))
     spot_history = list(kwargs.get("spot_history", []))
 
-    trend_type = str(kwargs.get("trend_type", "ema"))
-    lookback = int(kwargs.get("lookback", 50))
-    deviation_pct = float(kwargs.get("deviation_pct", 0.02))
-    entry_min = float(kwargs.get("entry_min", 0.05))
-    entry_max = float(kwargs.get("entry_max", 0.80))
-    time_guard = float(kwargs.get("time_guard", 5.0))
-    confidence_scale = float(kwargs.get("confidence_scale", 0.002))
+    # The registry entry is passed as config; read sweep params from there
+    # first, then fall back to kwargs for direct testing.
+    cfg = kwargs.get("config") or {}
+    trend_type = str(cfg.get("trend_type", kwargs.get("trend_type", "ema")))
+    lookback = int(cfg.get("lookback", kwargs.get("lookback", 50)))
+    deviation_pct = float(cfg.get("deviation_pct", kwargs.get("deviation_pct", 0.02)))
+    entry_min = float(cfg.get("entry_min", kwargs.get("entry_min", 0.05)))
+    entry_max = float(cfg.get("entry_max", kwargs.get("entry_max", 0.80)))
+    time_guard = float(cfg.get("time_guard", kwargs.get("time_guard", 5.0)))
+    confidence_scale = float(cfg.get("confidence_scale", kwargs.get("confidence_scale", 0.002)))
 
     neutral = {
         "triggered": False,
@@ -639,8 +642,12 @@ def trend_family_signal(**kwargs: Any) -> Dict[str, Any]:
         neutral["reason"] = f"unknown trend type {trend_type}"
         return neutral
 
+    # Merge config into a flat param dict for trend helpers
+    trend_params = dict(kwargs)
+    if cfg:
+        trend_params.update(cfg)
     try:
-        estimate = TREND_FUNCS[trend_type](arr, kwargs)
+        estimate = TREND_FUNCS[trend_type](arr, trend_params)
     except Exception as e:
         neutral["reason"] = f"trend error: {e}"
         return neutral
