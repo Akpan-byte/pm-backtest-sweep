@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ${ github.workflow }-${ github.ref }
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -36,7 +36,7 @@ jobs:
           - trend_sweep_batches/batch_18.txt
           - trend_sweep_batches/batch_19.txt
 
-    name: sweep-${ matrix.batch }
+    name: sweep-${{ matrix.batch }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -61,7 +61,7 @@ jobs:
           BT_IS_DIR: trend_sweep_taker
         run: |
           mkdir -p results/trend_sweep_taker
-          only=$(cat ${ matrix.batch })
+          only=$(cat ${{ matrix.batch }})
           python3 run_is.py \
             --files is_files_2k.txt \
             --workers 4 \
@@ -72,13 +72,13 @@ jobs:
       - name: Upload batch summaries
         uses: actions/upload-artifact@v4
         with:
-          name: trend-sweep-${ matrix.batch }
+          name: trend-sweep-${{ matrix.batch }}
           path: results/trend_sweep_taker/*.summary.json
           if-no-files-found: error
 
       - name: Upload batch trades
         uses: actions/upload-artifact@v4
         with:
-          name: trend-sweep-trades-${ matrix.batch }
+          name: trend-sweep-trades-${{ matrix.batch }}
           path: results/trend_sweep_taker/*.trades.jsonl.gz
           if-no-files-found: ignore
