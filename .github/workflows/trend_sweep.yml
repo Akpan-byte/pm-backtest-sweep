@@ -1,0 +1,78 @@
+name: trend_sweep
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 14
+      matrix:
+        batch:
+          - trend_sweep_batches/batch_00.txt
+          - trend_sweep_batches/batch_01.txt
+          - trend_sweep_batches/batch_02.txt
+          - trend_sweep_batches/batch_03.txt
+          - trend_sweep_batches/batch_04.txt
+          - trend_sweep_batches/batch_05.txt
+          - trend_sweep_batches/batch_06.txt
+          - trend_sweep_batches/batch_07.txt
+          - trend_sweep_batches/batch_08.txt
+          - trend_sweep_batches/batch_09.txt
+          - trend_sweep_batches/batch_10.txt
+          - trend_sweep_batches/batch_11.txt
+          - trend_sweep_batches/batch_12.txt
+          - trend_sweep_batches/batch_13.txt
+
+    name: sweep-${{ matrix.batch }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract 2k sample dataset
+        run: |
+          tar -xzf sample_2k.tar.gz --strip-components=1 -C /tmp
+          ls -ld /tmp/btc5m_compact
+          wc -l is_files_2k.txt
+
+      - name: Run trend sweep batch
+        env:
+          BT_EXTRA_STRATEGIES: trend_sweep_registry.json
+          BT_IS_DIR: trend_sweep_taker
+        run: |
+          mkdir -p results/trend_sweep_taker
+          only=$(cat ${{ matrix.batch }})
+          python3 run_is.py \
+            --files is_files_2k.txt \
+            --workers 4 \
+            --only "$only" \
+            --compact \
+            --fill taker
+
+      - name: Upload batch summaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend-sweep-${{ matrix.batch }}
+          path: results/trend_sweep_taker/*.summary.json
+          if-no-files-found: error
+
+      - name: Upload batch trades
+        uses: actions/upload-artifact@v4
+        with:
+          name: trend-sweep-trades-${{ matrix.batch }}
+          path: results/trend_sweep_taker/*.trades.jsonl.gz
+          if-no-files-found: ignore
