@@ -17,8 +17,8 @@ jobs:
       - run: pip install numpy pandas pyarrow
       - run: tar xzf sample_2k.tar.gz
       - name: Run 0s baseline
-        run: python3 driver.py --mode backtest --market-data-dir sample_2k --compact-input --is-file is_files_2k.txt --strategy ${{ matrix.strategy }} --opening-window-sec 0 --result-file result.json
+        run: python3 sweep_entry_timing.py --strategy "${{ matrix.strategy }}" --subsample 1 --windows 0
       - uses: actions/upload-artifact@v4
         with:
           name: baseline-${{ matrix.strategy }}
-          path: result.json
+          path: sweep_*.json
