@@ -6,3 +6,5 @@ results/
 !/backtest/quant_fast.py
 !/.github/workflows/quant_parallel.yml
 !/.github/workflows/upload_trades.yml
+!/.github/workflows/flip_test.yml
+!/flip_registry.json
