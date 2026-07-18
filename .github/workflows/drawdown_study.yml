@@ -215,16 +215,26 @@ jobs:
                       dd_list.append(tr["max_dd_pct"] - bl["max_dd_pct"])
                       ds_list.append(tr["sharpe_per_trade"] - bl["sharpe_per_trade"])
               if dp_list:
-                  import numpy as np
-                  lines.append(f"| {mode_labels[mode]} | {np.mean(dp_list):+.1f}% | {np.mean(dd_list):+.1f}% | {np.mean(ds_list):+.4f} | {np.median(dd_list):+.1f}% |")
+                  avg_dp = sum(dp_list) / len(dp_list)
+                  avg_dd = sum(dd_list) / len(dd_list)
+                  avg_ds = sum(ds_list) / len(ds_list)
+                  med_dd = sorted(dd_list)[len(dd_list) // 2]
+                  lines.append(f"| {mode_labels[mode]} | {avg_dp:+.1f}% | {avg_dd:+.1f}% | {avg_ds:+.4f} | {med_dd:+.1f}% |")
 
           # Recommendations
           lines.append("\n## Recommendations\n")
-          best_fixed = max(valid, key=lambda r: r.get("total_pnl", 0) if r.get("mode") == "fixed" else 0)
-          best_combined = max(valid, key=lambda r: r.get("total_pnl", 0) if r.get("mode") == "both" else 0)
-          if best_fixed and best_combined:
-              dd_reduction = best_fixed["max_dd_pct"] - best_combined["max_dd_pct"]
+          fixed_results = [r for r in valid if r.get("mode") == "fixed"]
+          if fixed_results:
+              best_fixed = max(fixed_results, key=lambda r: r.get("total_pnl", 0))
               lines.append(f"- **Best fixed**: {best_fixed['strategy']} — PnL=${best_fixed['total_pnl']:,.0f}, MaxDD={best_fixed['max_dd_pct']:.1f}%")
+          else:
+              best_fixed = None
+              lines.append("- No valid baseline results")
+          
+          combined_results = [r for r in valid if r.get("mode") == "combined"]
+          if combined_results and best_fixed:
+              best_combined = max(combined_results, key=lambda r: r.get("total_pnl", 0))
+              dd_reduction = best_fixed["max_dd_pct"] - best_combined["max_dd_pct"]
               lines.append(f"- **Best combined**: {best_combined['strategy']} — PnL=${best_combined['total_pnl']:,.0f}, MaxDD={best_combined['max_dd_pct']:.1f}%")
               lines.append(f"- **Drawdown reduction**: {dd_reduction:+.1f}% points")
 
