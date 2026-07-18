@@ -1,0 +1,105 @@
+# CHANGE_SUMMARY
+# 2026-07-18  kilo
+#   - Entry timing sweep: tests 10 opening_window_sec values across 3 strategies.
+#   - Uses 5x snapshot subsample for speed (~99% accurate).
+# WHY: Late entries get 12c better prices. Testing if waiting improves PnL.
+name: entry_timing_sweep
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        strategy:
+          - tf_dema_lb20_dev002_emax85_alp0001
+          - tf_vwap_ticks_lb50_dev002_emax80
+          - tf_holt_lb50_dev002_emax85_alp0002_hol0005
+
+    name: sweep-${{ matrix.strategy }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract 2k sample dataset
+        run: |
+          tar -xzf sample_2k.tar.gz --strip-components=1 -C /tmp
+          ls -ld /tmp/btc5m_compact
+          wc -l is_files_2k.txt
+
+      - name: Run entry timing sweep for ${{ matrix.strategy }}
+        run: |
+          python3 sweep_entry_timing.py \
+            --strategy "${{ matrix.strategy }}" \
+            --subsample 5 \
+            --output "sweep_${{ matrix.strategy }}.json"
+
+      - name: Upload sweep results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-${{ matrix.strategy }}
+          path: sweep_${{ matrix.strategy }}.json
+          if-no-files-found: error
+
+  # Full resolution re-run of top 2 configs
+  full-res:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: sweep
+    strategy:
+      fail-fast: false
+      matrix:
+        strategy:
+          - tf_dema_lb20_dev002_emax85_alp0001
+          - tf_vwap_ticks_lb50_dev002_emax80
+          - tf_holt_lb50_dev002_emax85_alp0002_hol0005
+        window: [5, 10]
+
+    name: fullres-${{ matrix.strategy }}-w${{ matrix.window }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Extract 2k sample dataset
+        run: |
+          tar -xzf sample_2k.tar.gz --strip-components=1 -C /tmp
+          ls -ld /tmp/btc5m_compact
+
+      - name: Run full resolution for ${{ matrix.strategy }} window ${{ matrix.window }}s
+        run: |
+          python3 sweep_entry_timing.py \
+            --strategy "${{ matrix.strategy }}" \
+            --subsample 1 \
+            --windows "${{ matrix.window }}" \
+            --output "fullres_${{ matrix.strategy }}_w${{ matrix.window }}.json"
+
+      - name: Upload full-res results
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullres-${{ matrix.strategy }}-w${{ matrix.window }}
+          path: fullres_${{ matrix.strategy }}_w${{ matrix.window }}.json
+          if-no-files-found: error

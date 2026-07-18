@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 # CHANGE_SUMMARY
+# 2026-07-18  kilo
+#   - Added opening_window_sec parameter to run_market_taker_arr.
+#     When set, blocks entries during first N seconds of each market.
+#     Used by entry timing sweep to test whether waiting improves fills.
+# WHY: Late entries get 12c better prices on NO trades. Testing if
+#      a simple opening window filter improves PnL and reduces drawdown.
 # 2026-07-14  kimi
 #   - Added optional BT_EXTRA_STRATEGIES env var: a JSON file merged into the
 #     imported STRATEGIES dict at import time. Lets per-coin runs add ETH/SOL
@@ -987,6 +993,9 @@ def run_market_taker_arr(arr: dict, reg_entry: dict, signal_fn,
             n_triggered += 1
             d = sig.get("direction")
             if d in ("YES", "NO") and rem_sec > 0:
+                opening_window = float(reg_entry.get("opening_window_sec", 0))
+                if elapsed_sec < opening_window:
+                    continue
                 taker_enter(pf, sig, market, d, yes_ask, yp, no_ask, np_val,
                             spot_price, sim_t, reg_entry, elapsed_sec=elapsed_sec)
     # expiry settlement of any open trade
