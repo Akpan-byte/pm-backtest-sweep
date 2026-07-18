@@ -39,16 +39,17 @@ jobs:
           mkdir -p trades
           
           echo "Downloading trade tarballs from release $TAG..."
-          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir trades/
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
           
-          echo "Extracting..."
-          for tar in trades/*.tar.gz; do
+          echo "Extracting (flattening nested paths)..."
+          for tar in dl/*.tar.gz; do
+            tar xzf "$tar" --strip-components=6 -C trades/ 2>/dev/null || \
             tar xzf "$tar" -C trades/ 2>/dev/null || true
           done
           
-          # Flatten: find all .trades.jsonl.gz files wherever they are and move to trades/
-          find trades/ -name "*.trades.jsonl.gz" -not -path "trades/*.gz" -exec mv {} trades/ \; 2>/dev/null || true
-          find trades/ -name "*.trades.jsonl" -not -path "trades/*.jsonl" -exec mv {} trades/ \; 2>/dev/null || true
+          # Fallback: find any .trades.jsonl.gz anywhere and move to trades/
+          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
+          find . -name "*.trades.jsonl" -not -path "./trades/*.trades.jsonl" -exec mv {} trades/ \; 2>/dev/null || true
           
           echo "Trade files:"
           ls -la trades/*.trades.jsonl.gz 2>/dev/null | awk '{print $5, $9}'
