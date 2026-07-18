@@ -1,0 +1,182 @@
+name: walk_forward
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub release tag with trade tarballs'
+        required: true
+        default: 'quant-data-v1'
+      total_workers:
+        description: 'Number of parallel workers (max 20)'
+        required: false
+        default: 20
+        type: number
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download trade data from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.release_tag }}"
+          mkdir -p trades
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
+          for tar in dl/*.tar.gz; do
+            tar xzf "$tar" --strip-components=6 -C trades/ 2>/dev/null || \
+            tar xzf "$tar" -C trades/ 2>/dev/null || true
+          done
+          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
+
+      - name: Run walk-forward on assigned strategies
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import glob, os, subprocess, sys
+
+          wid = int(os.environ.get("WORKER_ID", "${{ matrix.worker_id }}"))
+          nwk = int(os.environ.get("TOTAL_WORKERS", "${{ inputs.total_workers }}"))
+
+          files = sorted(glob.glob("trades/*.trades.jsonl.gz"))
+          files = [f for f in files if os.path.getsize(f) > 1000]
+          total = len(files)
+
+          if total == 0:
+              print("ERROR: No trade files found!")
+              sys.exit(1)
+
+          assigned = [f for i, f in enumerate(files) if i % nwk == wid]
+          print(f"Worker {wid}/{nwk}: {total} files total, assigned {len(assigned)}")
+
+          if not assigned:
+              print(f"Worker {wid}: nothing to do, exiting.")
+              sys.exit(0)
+
+          os.makedirs("backtest/results/is_taker_regime_full", exist_ok=True)
+          os.makedirs("backtest/results/walk_forward", exist_ok=True)
+
+          for f in assigned:
+              dest = f"backtest/results/is_taker_regime_full/{os.path.basename(f)}"
+              if not os.path.exists(dest):
+                  os.symlink(os.path.abspath(f), dest)
+
+          names = [os.path.basename(f).replace(".trades.jsonl.gz","") for f in assigned]
+          only = ",".join(names)
+
+          cmd = ["python3","backtest/walk_forward.py","--only",only,"--workers","1"]
+          print(f"Running: {' '.join(cmd)}")
+          r = subprocess.run(cmd)
+          if r.returncode != 0:
+              sys.exit(r.returncode)
+          PYEOF
+
+      - name: Upload walk-forward results
+        uses: actions/upload-artifact@v4
+        with:
+          name: wf-worker-${{ matrix.worker_id }}
+          path: backtest/results/walk_forward/
+          retention-days: 7
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: compute
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all worker results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p all_results
+          for i in $(seq 0 19); do
+            gh run download ${{ github.run_id }} \
+              --repo "${{ github.repository }}" \
+              --name "wf-worker-$i" \
+              --dir "worker-$i/" 2>/dev/null && \
+              cp worker-$i/*.json all_results/ 2>/dev/null || true
+          done
+          echo "Collected $(ls all_results/*.json 2>/dev/null | wc -l) result files"
+
+      - name: Merge and build report
+        run: |
+          python3 - <<'PYEOF'
+          import glob, json, os, sys
+          from collections import defaultdict
+
+          results = []
+          for p in sorted(glob.glob("all_results/*.json")):
+              try:
+                  with open(p) as f:
+                      data = json.load(f)
+                  if isinstance(data, dict) and "strategy" in data:
+                      results.append(data)
+              except Exception as e:
+                  print(f"WARN: skipping {p}: {e}")
+
+          valid = [r for r in results if "error" not in r and r.get("aggregate")]
+          print(f"Merged {len(valid)} valid results")
+
+          if not valid:
+              print("ERROR: no valid results")
+              sys.exit(1)
+
+          lines = ["# Walk-Forward Kelly Analysis (5-Fold Temporal Split)\n",
+                   "## Does the Kelly Edge Survive Out-of-Sample?\n",
+                   "| Strategy | Fixed PnL | Fixed MaxDD | Rolling Kelly PnL | Rolling Kelly MaxDD | PnL Retention% | DD Change |",
+                   "|---|---|---|---|---|---|---|"]
+
+          for r in sorted(valid, key=lambda x: x["strategy"]):
+              agg = r["aggregate"]
+              f_pnl = agg["fixed"]["total_pnl"]
+              f_dd = agg["fixed"]["max_dd_pct"]
+              rk_pnl = agg["rolling_kelly"]["total_pnl"]
+              rk_dd = agg["rolling_kelly"]["max_dd_pct"]
+              pnl_ret = 100 * rk_pnl / f_pnl if f_pnl != 0 else 0
+              dd_change = rk_dd - f_dd
+              lines.append(
+                  f"| {r['strategy'][:55]} | ${f_pnl:,.0f} | {f_dd:.1f}% | "
+                  f"${rk_pnl:,.0f} | {rk_dd:.1f}% | {pnl_ret:.0f}% | {dd_change:+.1f}% |")
+
+          # Verdict
+          lines.append("\n## Verdict\n")
+          avg_ret = sum(100 * r["aggregate"]["rolling_kelly"]["total_pnl"] / r["aggregate"]["fixed"]["total_pnl"]
+                        for r in valid if r["aggregate"]["fixed"]["total_pnl"] != 0) / len(valid)
+          avg_dd_change = sum(r["aggregate"]["rolling_kelly"]["max_dd_pct"] - r["aggregate"]["fixed"]["max_dd_pct"]
+                              for r in valid) / len(valid)
+          lines.append(f"- **Average PnL retention**: {avg_ret:.0f}%")
+          lines.append(f"- **Average MaxDD change**: {avg_dd_change:+.1f}%")
+          if avg_ret > 80 and avg_dd_change < 0:
+              lines.append("- **VERDICT: Kelly edge survives OOS** — real edge detected")
+          elif avg_ret > 50:
+              lines.append("- **VERDICT: Partial edge** — Kelly helps but overfitting is significant")
+          else:
+              lines.append("- **VERDICT: No real edge** — Kelly is overfitting the IS data")
+
+          os.makedirs("merged", exist_ok=True)
+          with open("merged/walk_forward.json", "w") as f:
+              json.dump(valid, f, indent=1)
+          with open("merged/walk_forward.md", "w") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print("\n".join(lines))
+          PYEOF
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: walk-forward-report
+          path: merged/
+          retention-days: 30
