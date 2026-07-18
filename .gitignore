@@ -8,6 +8,8 @@ results/
 !/.github/workflows/upload_trades.yml
 !/.github/workflows/flip_test.yml
 !/.github/workflows/entry_timing_sweep.yml
+!/.github/workflows/stop_loss_sweep.yml
 !/flip_registry.json
 !/sweep_entry_timing.py
+!/sweep_stop_loss.py
 !/analyze_sweep.py

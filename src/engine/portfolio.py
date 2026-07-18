@@ -563,11 +563,14 @@ class Portfolio:
         rem_sec: float,
         oracle_spot: float | None = None,
         indicators: dict[str, Any] | None = None,
+        stop_loss_pct: float = 0.0,
     ) -> list[Trade]:
         """Evaluate active trades and close any that hit EXIT_SNIPE_PRICE or expiry.
 
         ``oracle_spot`` is the Chainlink RTDS reference price. When provided it
         is used for expiry resolution instead of the regular ``spot`` feed.
+        ``stop_loss_pct``: if > 0, exit trades when unrealised loss exceeds this
+        fraction of the entry price (e.g. 0.30 = 30% stop-loss).
         """
         closed: list[Trade] = []
         # Defensive: callers may pass None when Redis prices are missing. Treat
@@ -577,6 +580,17 @@ class Portfolio:
         rem_sec = float(rem_sec) if rem_sec is not None else 0.0
         resolve_spot = oracle_spot if oracle_spot is not None else spot
         for condition_id, trade in list(self.active_trades.items()):
+            # --- stop-loss check (universal, all strategies) ---
+            if stop_loss_pct > 0:
+                current_price = yp if trade.direction == "YES" else np_val
+                loss_pct = (trade.entry_price - current_price) / trade.entry_price
+                if loss_pct >= stop_loss_pct:
+                    exit_price = current_price
+                    reason = f"stop_loss_{loss_pct:.1%}"
+                    self._close_trade(trade, exit_price, reason)
+                    closed.append(trade)
+                    continue
+
             exit_price, reason = self._eval_exit_rules(
                 trade, yp, np_val, rem_sec, indicators
             )

@@ -1,0 +1,43 @@
+name: Stop-Loss Sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: 'Strategy name from registry'
+        required: true
+        default: 'tf_vwap_ticks_lb20_dev002_emax80'
+        type: choice
+        options:
+          - tf_vwap_ticks_lb20_dev002_emax80
+          - tf_vwap_ticks_lb20_dev002_emax85
+          - tf_holt_lb20_dev002_emax80_alp0001_hol0005
+          - tf_holt_lb20_dev002_emax85_alp0001_hol0005
+          - tf_dema_lb20_dev002_emax80_alp0001
+          - tf_dema_lb20_dev002_emax85_alp0001
+      stop_loss_pct:
+        description: 'Stop-loss percentage (e.g. 0.30 = 30%)'
+        required: true
+        default: '0.30'
+        type: string
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run stop-loss sweep
+        run: |
+          python3 sweep_stop_loss.py "${{ github.event.inputs.strategy }}" "${{ github.event.inputs.stop_loss_pct }}"
+
+      - name: Collect results
+        if: always()
+        run: |
+          echo "=== Stop-Loss Sweep Results ==="
+          echo "Strategy: ${{ github.event.inputs.strategy }}"
+          echo "Stop-Loss: ${{ github.event.inputs.stop_loss_pct }}"
