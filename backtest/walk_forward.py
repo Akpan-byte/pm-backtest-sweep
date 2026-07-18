@@ -16,7 +16,7 @@ OUTPUT_DIR = os.path.join(HERE, "results", "walk_forward")
 
 CAPITAL = 200.0
 BASE_RISK_PCT = 0.005
-KELLY_FRACTION = 0.25  # Quarter Kelly
+KELLY_FRACTION = 0.10  # 1/10 Kelly (conservative)
 KELLY_WINDOW = 500     # Rolling window for parameter estimation
 MIN_HISTORY = 100      # Minimum trades before Kelly kicks in
 N_FOLDS = 5
@@ -286,6 +286,68 @@ def simulate_rolling_kelly_fold(train_pnls: list, test_pnls: list, window: int =
     }
 
 
+def simulate_sizing_reduction_fold(train_pnls: list, test_pnls: list, reduction_pct: float = 50.0) -> dict:
+    """Sizing reduction: scale down PnL during drawdowns.
+    
+    Uses the SAME equity curve approach as drawdown_study but applied
+    walk-forward: the drawdown state is computed from the test fold's
+    own equity curve (no look-ahead into training data).
+    """
+    equity = CAPITAL
+    peak = CAPITAL
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    wins = 0
+    losses = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    sum_pnl = 0.0
+    underwater = 0
+    scaled_pnls = []
+
+    for pnl in test_pnls:
+        dd_pct = 100 * (peak - equity) / peak if peak > 0 else 0
+        factor = max(0.25, 1.0 - dd_pct * reduction_pct / 10000.0)
+        scaled = pnl * factor
+        scaled_pnls.append(scaled)
+        equity += scaled
+        sum_pnl += scaled
+        if equity > peak:
+            peak = equity
+        dd = peak - equity
+        dd_pct_actual = 100 * dd / peak if peak > 0 else 0
+        if dd > max_dd:
+            max_dd = dd
+            max_dd_pct = dd_pct_actual
+        if dd > 0:
+            underwater += 1
+        if scaled > 0:
+            wins += 1
+            gross_profit += scaled
+        elif scaled < 0:
+            losses += 1
+            gross_loss -= scaled
+
+    n = len(test_pnls)
+    mean_p = sum_pnl / n if n > 0 else 0
+    std_p = statistics.stdev(scaled_pnls) if n > 1 else 0.0
+    sharpe = mean_p / std_p if std_p > 0 else 0
+
+    return {
+        "final_equity": round(equity, 2),
+        "total_pnl": round(sum_pnl, 2),
+        "return_pct": round(100 * sum_pnl / CAPITAL, 2),
+        "peak_equity": round(peak, 2),
+        "max_dd_pct": round(max_dd_pct, 2),
+        "pct_time_underwater": round(100 * underwater / n, 1) if n > 0 else 0,
+        "win_rate": round(wins / n, 4) if n > 0 else 0,
+        "wins": wins, "losses": losses,
+        "profit_factor": round(gross_profit / gross_loss, 4) if gross_loss > 0 else None,
+        "sharpe_per_trade": round(sharpe, 4),
+        "n_trades": n,
+    }
+
+
 def run_walk_forward(args):
     """Run walk-forward analysis for one strategy."""
     name, path = args
@@ -315,6 +377,9 @@ def run_walk_forward(args):
         # Rolling Kelly (update every trade from training seed)
         rolling_kelly = simulate_rolling_kelly_fold(train_pnls, test_pnls)
 
+        # Sizing reduction (no training needed — uses own equity curve)
+        sizing_red = simulate_sizing_reduction_fold(train_pnls, test_pnls, reduction_pct=50.0)
+
         results["folds"].append({
             "fold": fold + 1,
             "train_range": f"0-{test_start}",
@@ -324,22 +389,22 @@ def run_walk_forward(args):
             "fixed": fixed,
             "fixed_kelly": fixed_kelly,
             "rolling_kelly": rolling_kelly,
+            "sizing_reduction": sizing_red,
         })
 
     # Aggregate across folds
-    agg = {"fixed": {"total_pnl": 0, "max_dd_pct": 0, "sharpe_sum": 0, "n": 0},
-           "fixed_kelly": {"total_pnl": 0, "max_dd_pct": 0, "sharpe_sum": 0, "n": 0},
-           "rolling_kelly": {"total_pnl": 0, "max_dd_pct": 0, "sharpe_sum": 0, "n": 0}}
+    modes = ["fixed", "fixed_kelly", "rolling_kelly", "sizing_reduction"]
+    agg = {m: {"total_pnl": 0, "max_dd_pct": 0, "sharpe_sum": 0, "n": 0} for m in modes}
 
     for fold_r in results["folds"]:
-        for mode in ["fixed", "fixed_kelly", "rolling_kelly"]:
+        for mode in modes:
             r = fold_r[mode]
             agg[mode]["total_pnl"] += r["total_pnl"]
             agg[mode]["max_dd_pct"] = max(agg[mode]["max_dd_pct"], r["max_dd_pct"])
             agg[mode]["sharpe_sum"] += r["sharpe_per_trade"]
             agg[mode]["n"] += 1
 
-    for mode in ["fixed", "fixed_kelly", "rolling_kelly"]:
+    for mode in modes:
         a = agg[mode]
         a["avg_sharpe"] = round(a["sharpe_sum"] / a["n"], 4) if a["n"] > 0 else 0
         del a["sharpe_sum"]
@@ -407,32 +472,31 @@ def main():
 
         strat = r["strategy"]
         lines.append(f"### {strat} ({r['total_trades']:,} trades)\n")
-        lines.append("| Fold | Train | Test | Fixed PnL | Fixed MaxDD | Fixed Kelly PnL | Fixed Kelly MaxDD | Rolling Kelly PnL | Rolling Kelly MaxDD |")
+        lines.append("| Fold | Train | Test | Fixed PnL | Fixed MaxDD | Rolling Kelly PnL | Rolling Kelly MaxDD | Size Red PnL | Size Red MaxDD |")
         lines.append("|---|---|---|---|---|---|---|---|---|")
 
         for fold_r in r["folds"]:
             f = fold_r["fixed"]
-            fk = fold_r["fixed_kelly"]
             rk = fold_r["rolling_kelly"]
+            sr = fold_r["sizing_reduction"]
             lines.append(
                 f"| {fold_r['fold']} | {fold_r['train_trades']:,} | {fold_r['test_trades']:,} | "
                 f"${f['total_pnl']:,.0f} | {f['max_dd_pct']:.1f}% | "
-                f"${fk['total_pnl']:,.0f} | {fk['max_dd_pct']:.1f}% | "
-                f"${rk['total_pnl']:,.0f} | {rk['max_dd_pct']:.1f}% |")
+                f"${rk['total_pnl']:,.0f} | {rk['max_dd_pct']:.1f}% | "
+                f"${sr['total_pnl']:,.0f} | {sr['max_dd_pct']:.1f}% |")
 
         agg = r["aggregate"]
         lines.append(
             f"| **TOTAL** | | | "
             f"**${agg['fixed']['total_pnl']:,.0f}** | **{agg['fixed']['max_dd_pct']:.1f}%** | "
-            f"**${agg['fixed_kelly']['total_pnl']:,.0f}** | **{agg['fixed_kelly']['max_dd_pct']:.1f}%** | "
-            f"**${agg['rolling_kelly']['total_pnl']:,.0f}** | **{agg['rolling_kelly']['max_dd_pct']:.1f}%** |")
+            f"**${agg['rolling_kelly']['total_pnl']:,.0f}** | **{agg['rolling_kelly']['max_dd_pct']:.1f}%** | "
+            f"**${agg['sizing_reduction']['total_pnl']:,.0f}** | **{agg['sizing_reduction']['max_dd_pct']:.1f}%** |")
         lines.append("")
 
-    # Summary: does Kelly edge survive walk-forward?
+    # Summary
     lines.append("## Walk-Forward Summary\n")
-    lines.append("Does the Kelly edge survive out-of-sample?\n")
-    lines.append("| Strategy | Fixed PnL | Fixed MaxDD | Rolling Kelly PnL | Rolling Kelly MaxDD | PnL Retention% | DD Reduction% |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("| Strategy | Fixed PnL | Fixed MaxDD | Rolling Kelly PnL | Kelly MaxDD | Size Red PnL | Size Red MaxDD | Kelly PnL Ret% | Size Red PnL Ret% |")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
 
     for r in sorted(all_results, key=lambda x: x.get("strategy", "")):
         if "error" in r or not r.get("aggregate"):
@@ -442,16 +506,21 @@ def main():
         f_dd = agg["fixed"]["max_dd_pct"]
         rk_pnl = agg["rolling_kelly"]["total_pnl"]
         rk_dd = agg["rolling_kelly"]["max_dd_pct"]
-        pnl_ret = 100 * rk_pnl / f_pnl if f_pnl != 0 else 0
-        dd_red = f_dd - rk_dd
+        sr_pnl = agg["sizing_reduction"]["total_pnl"]
+        sr_dd = agg["sizing_reduction"]["max_dd_pct"]
+        kelly_ret = 100 * rk_pnl / f_pnl if f_pnl != 0 else 0
+        sr_ret = 100 * sr_pnl / f_pnl if f_pnl != 0 else 0
         lines.append(
             f"| {r['strategy'][:50]} | ${f_pnl:,.0f} | {f_dd:.1f}% | "
-            f"${rk_pnl:,.0f} | {rk_dd:.1f}% | {pnl_ret:.0f}% | {dd_red:+.1f}% |")
+            f"${rk_pnl:,.0f} | {rk_dd:.1f}% | "
+            f"${sr_pnl:,.0f} | {sr_dd:.1f}% | "
+            f"{kelly_ret:.0f}% | {sr_ret:.0f}% |")
 
     lines.append("\n## Verdict\n")
-    lines.append("- **PnL Retention > 80%** and **DD Reduction > 0** = Kelly has a real edge OOS")
-    lines.append("- **PnL Retention < 50%** = Kelly is overfitting, edge doesn't survive")
-    lines.append("- **MaxDD increases** with Kelly = edge is negative or Kelly is miscalibrated")
+    lines.append("- **Kelly**: bets bigger when winning, smaller when losing — amplifies the edge if parameters are right")
+    lines.append("- **Sizing Reduction**: reduces position size during drawdowns — simpler, no parameter estimation needed")
+    lines.append("- Look for: **PnL retention > 80%** AND **MaxDD reduction** = practical edge")
+    lines.append("- If Kelly MaxDD > Fixed MaxDD: Kelly is overbetting (parameters wrong)")
 
     with open(os.path.join(OUTPUT_DIR, "walk_forward.md"), "w") as f:
         f.write("\n".join(lines) + "\n")
