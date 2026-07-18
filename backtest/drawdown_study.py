@@ -321,9 +321,13 @@ def main():
             lines.append(f"| {cfg['label']} | {sum(dp_list)/len(dp_list):+.1f}% | {sum(dd_list)/len(dd_list):+.1f}% | {sum(ds_list)/len(ds_list):+.4f} | {sorted(dd_list)[len(dd_list)//2]:+.1f}% |")
     
     lines.append("\n## Recommendations\n")
-    best_fixed = max((r for r in results if r.get("mode") == "fixed" and "error" not in r), key=lambda r: r.get("total_pnl", 0))
-    if best_fixed:
+    fixed_results = [r for r in results if r.get("mode") == "fixed" and "error" not in r]
+    if fixed_results:
+        best_fixed = max(fixed_results, key=lambda r: r.get("total_pnl", 0))
         lines.append(f"- **Best baseline**: {best_fixed['strategy']} — PnL=${best_fixed['total_pnl']:,.0f}, MaxDD={best_fixed['max_dd_pct']:.1f}%")
+    else:
+        best_fixed = None
+        lines.append("- No valid baseline results found")
     
     combined_results = [r for r in results if r.get("mode") == "combined" and "error" not in r]
     if combined_results and best_fixed:
