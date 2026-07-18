@@ -84,11 +84,11 @@ jobs:
               print(f"Worker {wid}: nothing to do, exiting.")
               sys.exit(0)
 
-          os.makedirs("results/is_taker_regime_full", exist_ok=True)
-          os.makedirs("results/quant_fast", exist_ok=True)
+          os.makedirs("backtest/results/is_taker_regime_full", exist_ok=True)
+          os.makedirs("backtest/results/quant_fast", exist_ok=True)
           
           for f in assigned:
-              dest = f"results/is_taker_regime_full/{os.path.basename(f)}"
+              dest = f"backtest/results/is_taker_regime_full/{os.path.basename(f)}"
               os.symlink(os.path.abspath(f), dest)
 
           names = [os.path.basename(f).replace(".trades.jsonl.gz","").replace(".trades.jsonl","") for f in assigned]
@@ -106,7 +106,7 @@ jobs:
           
           print(f"\nWorker {wid} done. Results:")
           for n in names:
-              p = f"results/quant_fast/{n}.quant.json"
+              p = f"backtest/results/quant_fast/{n}.quant.json"
               if os.path.exists(p):
                   sz = os.path.getsize(p)
                   print(f"  ✓ {n}.quant.json ({sz} bytes)")
@@ -118,7 +118,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: quant-worker-${{ matrix.worker_id }}
-          path: results/quant_fast/
+          path: backtest/results/quant_fast/
           retention-days: 7
 
   merge:
