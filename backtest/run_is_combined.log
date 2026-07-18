@@ -1,0 +1,4 @@
+WARN: BT_IS_DIR dir /config/worktrees/kilo_regime_filter/backtest/results/is_taker_trend_regime != --fill taker (is_taker)
+files listed: 18086
+strategies to run: 25 (per_snapshot=25, daily_orb=0, indicator=0)
+reference rows loaded: None
