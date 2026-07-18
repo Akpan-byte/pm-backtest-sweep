@@ -3,3 +3,6 @@ __pycache__/
 *.pyo
 results/
 *.log
+!/backtest/quant_fast.py
+!/.github/workflows/quant_parallel.yml
+!/.github/workflows/upload_trades.yml
