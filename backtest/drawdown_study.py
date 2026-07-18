@@ -3,13 +3,12 @@
 # 2026-07-18  kilo
 #   - Post-processes existing trade data to simulate equity curve trading
 #     and drawdown-based position reduction, without re-running the backtest.
-#   - Fixed: removed Kelly PnL scaling (data already has fixed sizing baked in).
-#   - Added: drawdown-gate filter (skip trades during active drawdowns).
+#   - Stdlib-only (no numpy) for GHA runner compatibility.
 # WHY: User wants to reduce 50%+ drawdowns while keeping profitability.
 from __future__ import annotations
-import argparse, glob, gzip, json, math, os, time
+import argparse, glob, gzip, json, math, os, statistics, time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import numpy as np
+from collections import deque
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRADES_DIR = os.path.join(HERE, "results", "is_taker_regime_full")
@@ -19,8 +18,8 @@ CAPITAL = 200.0
 BASE_RISK_PCT = 0.005
 
 
-def load_pnl_array(path: str) -> np.ndarray:
-    """Load just the pnl values from a gzipped jsonl into a numpy array."""
+def load_pnl_array(path: str) -> list[float]:
+    """Load just the pnl values from a gzipped jsonl into a list."""
     pnls = []
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         for line in fh:
@@ -31,10 +30,10 @@ def load_pnl_array(path: str) -> np.ndarray:
                 pnls.append(float(json.loads(line)["pnl"]))
             except (json.JSONDecodeError, KeyError):
                 continue
-    return np.array(pnls, dtype=np.float64)
+    return pnls
 
 
-def _metrics(pnls_taken: np.ndarray, n_total: int, n_skipped: int, equity_final: float, peak: float) -> dict:
+def _metrics(pnls_taken: list, n_total: int, n_skipped: int) -> dict:
     """Compute standard metrics from the taken-trade PnL sequence."""
     n = len(pnls_taken)
     if n == 0:
@@ -49,28 +48,47 @@ def _metrics(pnls_taken: np.ndarray, n_total: int, n_skipped: int, equity_final:
         }
     
     # Rebuild equity curve from taken trades only
-    eq = np.cumsum(pnls_taken) + CAPITAL
-    pk = np.maximum.accumulate(eq)
-    dd = pk - eq
-    dd_pct = np.where(pk > 0, 100 * dd / pk, 0)
-    underwater = int(np.sum(dd > 0))
+    equity = CAPITAL
+    peak = CAPITAL
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    underwater = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    wins = 0
+    losses = 0
+    sum_pnl = 0.0
     
-    wins = int(np.sum(pnls_taken > 0))
-    losses = int(np.sum(pnls_taken < 0))
-    gross_profit = float(np.sum(pnls_taken[pnls_taken > 0]))
-    gross_loss = float(np.sum(-pnls_taken[pnls_taken < 0]))
+    for pnl in pnls_taken:
+        equity += pnl
+        sum_pnl += pnl
+        if equity > peak:
+            peak = equity
+        dd = peak - equity
+        dd_pct = 100 * dd / peak if peak > 0 else 0
+        if dd > max_dd:
+            max_dd = dd
+            max_dd_pct = dd_pct
+        if dd > 0:
+            underwater += 1
+        if pnl > 0:
+            wins += 1
+            gross_profit += pnl
+        elif pnl < 0:
+            losses += 1
+            gross_loss -= pnl
     
-    mean_p = float(np.mean(pnls_taken))
-    std_p = float(np.std(pnls_taken))
+    mean_p = sum_pnl / n
+    std_p = statistics.stdev(pnls_taken) if n > 1 else 0.0
     sharpe = mean_p / std_p if std_p > 0 else 0
     
     return {
-        "final_equity": round(float(eq[-1]), 2),
-        "total_pnl": round(float(np.sum(pnls_taken)), 2),
-        "return_pct": round(100 * float(np.sum(pnls_taken)) / CAPITAL, 2),
-        "peak_equity": round(float(pk[-1]), 2),
-        "max_dd_usd": round(float(np.max(dd)), 2),
-        "max_dd_pct": round(float(np.max(dd_pct)), 2),
+        "final_equity": round(equity, 2),
+        "total_pnl": round(sum_pnl, 2),
+        "return_pct": round(100 * sum_pnl / CAPITAL, 2),
+        "peak_equity": round(peak, 2),
+        "max_dd_usd": round(max_dd, 2),
+        "max_dd_pct": round(max_dd_pct, 2),
         "pct_time_underwater": round(100 * underwater / n, 1) if n > 0 else 0,
         "win_rate": round(wins / n, 4) if n > 0 else 0,
         "wins": wins, "losses": losses,
@@ -84,38 +102,36 @@ def _metrics(pnls_taken: np.ndarray, n_total: int, n_skipped: int, equity_final:
     }
 
 
-def simulate_fixed(pnls: np.ndarray) -> dict:
-    """Vectorized fixed-risk baseline — pure numpy, very fast."""
-    return _metrics(pnls, len(pnls), 0, 0, 0)
+def simulate_fixed(pnls: list) -> dict:
+    """Baseline: take every trade, fixed 0.5% risk."""
+    return _metrics(pnls, len(pnls), 0)
 
 
-def simulate_equity_curve(pnls: np.ndarray, sma_period: int = 100) -> dict:
+def simulate_equity_curve(pnls: list, sma_period: int = 100) -> dict:
     """Equity curve filter: skip trades when equity < SMA of equity."""
     n = len(pnls)
     taken = []
     skipped = 0
     equity = CAPITAL
-    
-    # Use a simple SMA (faster to adapt than EMA)
-    eq_history = [CAPITAL]
+    eq_history = deque(maxlen=sma_period + 1)
+    eq_history.append(CAPITAL)
     
     for i, pnl in enumerate(pnls):
-        # Equity curve gate: only trade when equity > recent average
         if i >= sma_period:
-            sma = np.mean(eq_history[-sma_period:])
+            sma = sum(eq_history) / len(eq_history)
             if equity < sma:
                 skipped += 1
-                eq_history.append(equity)  # equity unchanged
+                eq_history.append(equity)
                 continue
         
         taken.append(pnl)
         equity += pnl
         eq_history.append(equity)
     
-    return _metrics(np.array(taken), n, skipped, equity, max(eq_history))
+    return _metrics(taken, n, skipped)
 
 
-def simulate_drawdown_gate(pnls: np.ndarray, dd_threshold_pct: float = 10.0) -> dict:
+def simulate_drawdown_gate(pnls: list, dd_threshold_pct: float = 10.0) -> dict:
     """Drawdown gate: skip trades when in drawdown > threshold from peak."""
     n = len(pnls)
     taken = []
@@ -135,29 +151,28 @@ def simulate_drawdown_gate(pnls: np.ndarray, dd_threshold_pct: float = 10.0) -> 
         if equity > peak:
             peak = equity
     
-    return _metrics(np.array(taken), n, skipped, equity, peak)
+    return _metrics(taken, n, skipped)
 
 
-def simulate_combined(pnls: np.ndarray, sma_period: int = 100, dd_threshold_pct: float = 10.0) -> dict:
+def simulate_combined(pnls: list, sma_period: int = 100, dd_threshold_pct: float = 10.0) -> dict:
     """Combined: equity curve + drawdown gate."""
     n = len(pnls)
     taken = []
     skipped = 0
     equity = CAPITAL
     peak = CAPITAL
-    eq_history = [CAPITAL]
+    eq_history = deque(maxlen=sma_period + 1)
+    eq_history.append(CAPITAL)
     
     for i, pnl in enumerate(pnls):
         dd_pct = 100 * (peak - equity) / peak if peak > 0 else 0
         skip = False
         
-        # Drawdown gate
         if dd_pct > dd_threshold_pct:
             skip = True
         
-        # Equity curve gate
         if not skip and i >= sma_period:
-            sma = np.mean(eq_history[-sma_period:])
+            sma = sum(eq_history) / len(eq_history)
             if equity < sma:
                 skip = True
         
@@ -172,7 +187,7 @@ def simulate_combined(pnls: np.ndarray, sma_period: int = 100, dd_threshold_pct:
             peak = equity
         eq_history.append(equity)
     
-    return _metrics(np.array(taken), n, skipped, equity, peak)
+    return _metrics(taken, n, skipped)
 
 
 def run_one_strategy(args):
@@ -221,7 +236,6 @@ def main():
         keep = set(args.only.split(","))
         names = [n for n in names if n in keep]
     
-    # Filter tiny files (< 1KB = incomplete)
     filtered = []
     for n in names:
         p = os.path.join(TRADES_DIR, f"{n}.trades.jsonl.gz")
@@ -259,7 +273,7 @@ def main():
             if i % 10 == 0:
                 print(f"  [{i}/{len(jobs)} done, {time.time()-t0:.0f}s]", flush=True)
     
-    # Write per-strategy JSON (safe for GHA parallel workers)
+    # Write per-strategy JSON
     from collections import defaultdict
     by_strat = defaultdict(list)
     for r in results:
@@ -270,7 +284,6 @@ def main():
         with open(os.path.join(OUTPUT_DIR, f"{strat}.drawdown.json"), "w") as f:
             json.dump(cfgs, f, indent=1)
     
-    # Also write combined file
     with open(os.path.join(OUTPUT_DIR, "drawdown_study.json"), "w") as f:
         json.dump(results, f, indent=1)
     
@@ -305,15 +318,13 @@ def main():
                 dd_list.append(tr["max_dd_pct"] - bl["max_dd_pct"])
                 ds_list.append(tr["sharpe_per_trade"] - bl["sharpe_per_trade"])
         if dp_list:
-            lines.append(f"| {cfg['label']} | {np.mean(dp_list):+.1f}% | {np.mean(dd_list):+.1f}% | {np.mean(ds_list):+.4f} | {np.median(dd_list):+.1f}% |")
+            lines.append(f"| {cfg['label']} | {sum(dp_list)/len(dp_list):+.1f}% | {sum(dd_list)/len(dd_list):+.1f}% | {sum(ds_list)/len(ds_list):+.4f} | {sorted(dd_list)[len(dd_list)//2]:+.1f}% |")
     
-    # Best strategy
     lines.append("\n## Recommendations\n")
     best_fixed = max((r for r in results if r.get("mode") == "fixed" and "error" not in r), key=lambda r: r.get("total_pnl", 0))
     if best_fixed:
         lines.append(f"- **Best baseline**: {best_fixed['strategy']} — PnL=${best_fixed['total_pnl']:,.0f}, MaxDD={best_fixed['max_dd_pct']:.1f}%")
     
-    # Find best combined (lowest MaxDD with acceptable PnL retention)
     combined_results = [r for r in results if r.get("mode") == "combined" and "error" not in r]
     if combined_results and best_fixed:
         best_c = max(combined_results, key=lambda r: r.get("total_pnl", 0))
