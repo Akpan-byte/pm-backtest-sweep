@@ -43,8 +43,12 @@ jobs:
           
           echo "Extracting..."
           for tar in trades/*.tar.gz; do
-            tar xzf "$tar" -C trades/ --strip-components=0 2>/dev/null || tar xzf "$tar" -C trades/
+            tar xzf "$tar" -C trades/ 2>/dev/null || true
           done
+          
+          # Flatten: find all .trades.jsonl.gz files wherever they are and move to trades/
+          find trades/ -name "*.trades.jsonl.gz" -not -path "trades/*.gz" -exec mv {} trades/ \; 2>/dev/null || true
+          find trades/ -name "*.trades.jsonl" -not -path "trades/*.jsonl" -exec mv {} trades/ \; 2>/dev/null || true
           
           echo "Trade files:"
           ls -la trades/*.trades.jsonl.gz 2>/dev/null | awk '{print $5, $9}'
