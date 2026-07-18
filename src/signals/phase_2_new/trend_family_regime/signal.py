@@ -282,7 +282,9 @@ def trend_family_regime_signal(**kwargs: Any) -> Dict[str, Any]:
                     if flipped == "NO"
                     else float(kwargs.get("yes_ask", kwargs.get("yp", 0.0)))
                 )
-                if entry_min <= entry_price <= entry_max:
+                flip_entry_min = float(cfg.get("entry_min", 0.05))
+                flip_entry_max = float(cfg.get("entry_max", 0.80))
+                if flip_entry_min <= entry_price <= flip_entry_max:
                     sig["direction"] = flipped
                     sig["entry_price"] = entry_price
                     sig["confidence"] = min(1.0, max(0.0, 0.5))
