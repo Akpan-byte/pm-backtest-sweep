@@ -98,7 +98,7 @@ jobs:
           env["BT_IS_DIR"] = "is_taker_regime_full"
           env["BT_Q_DIR"] = "quant_fast"
           
-          cmd = ["python3","backtest/quant_fast.py","--only",only,"--fill","taker","--workers","2"]
+          cmd = ["python3","backtest/quant_fast.py","--only",only,"--workers","2"]
           print(f"\nRunning: {' '.join(cmd)}")
           r = subprocess.run(cmd, env=env)
           if r.returncode != 0:
