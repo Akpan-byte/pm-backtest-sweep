@@ -15,7 +15,10 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.12' }
       - run: pip install numpy pandas pyarrow
-      - run: tar xzf sample_2k.tar.gz
+      - name: Extract 2k sample dataset
+        run: |
+          tar -xzf sample_2k.tar.gz --strip-components=1 -C /tmp
+          ls -ld /tmp/btc5m_compact
       - name: Run 0s baseline
         run: python3 sweep_entry_timing.py --strategy "${{ matrix.strategy }}" --subsample 1 --windows 0
       - uses: actions/upload-artifact@v4
