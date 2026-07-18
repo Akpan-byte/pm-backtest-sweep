@@ -1,0 +1,246 @@
+# CHANGE_SUMMARY
+# 2026-07-18  kilo
+#   - 20-worker GHA drawdown study: dynamic sizing + equity curve trading
+#   - Downloads trade tarballs, runs drawdown_study.py per strategy
+#   - Each worker loads 1 strategy file once, runs all 4 configs
+# WHY: User wants to reduce 50%+ drawdowns while keeping profitability.
+name: drawdown_study
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub release tag with trade tarballs'
+        required: true
+        default: 'quant-data-v1'
+      total_workers:
+        description: 'Number of parallel workers (max 20)'
+        required: false
+        default: 20
+        type: number
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download trade data from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.release_tag }}"
+          mkdir -p trades
+          
+          echo "Downloading trade tarballs from release $TAG..."
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
+          
+          echo "Extracting (flattening nested paths)..."
+          for tar in dl/*.tar.gz; do
+            tar xzf "$tar" --strip-components=6 -C trades/ 2>/dev/null || \
+            tar xzf "$tar" -C trades/ 2>/dev/null || true
+          done
+          
+          # Fallback: find any .trades.jsonl.gz anywhere and move to trades/
+          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
+          find . -name "*.trades.jsonl" -not -path "./trades/*.trades.jsonl" -exec mv {} trades/ \; 2>/dev/null || true
+          
+          echo "Trade files:"
+          ls -la trades/*.trades.jsonl.gz 2>/dev/null | awk '{print $5, $9}'
+          echo "Total: $(ls trades/*.trades.jsonl.gz 2>/dev/null | wc -l) files"
+
+      - name: Run drawdown study on assigned strategies
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import glob, os, subprocess, sys
+
+          wid = int(os.environ.get("WORKER_ID", "${{ matrix.worker_id }}"))
+          nwk = int(os.environ.get("TOTAL_WORKERS", "${{ inputs.total_workers }}"))
+
+          files = sorted(glob.glob("trades/*.trades.jsonl.gz"))
+          if not files:
+              files = sorted(glob.glob("trades/*.trades.jsonl"))
+          total = len(files)
+          
+          if total == 0:
+              print(f"ERROR: No trade files found!")
+              sys.exit(1)
+
+          # Filter tiny files (< 1KB = incomplete)
+          files = [f for f in files if os.path.getsize(f) > 1000]
+          total = len(files)
+          
+          assigned = [f for i, f in enumerate(files) if i % nwk == wid]
+          print(f"Worker {wid}/{nwk}: {total} files total, assigned {len(assigned)}")
+          for f in assigned:
+              sz = os.path.getsize(f)
+              print(f"  {os.path.basename(f)} ({sz/1048576:.0f}MB)")
+
+          if not assigned:
+              print(f"Worker {wid}: nothing to do, exiting.")
+              sys.exit(0)
+
+          os.makedirs("backtest/results/is_taker_regime_full", exist_ok=True)
+          os.makedirs("backtest/results/drawdown_study", exist_ok=True)
+          
+          for f in assigned:
+              dest = f"backtest/results/is_taker_regime_full/{os.path.basename(f)}"
+              if not os.path.exists(dest):
+                  os.symlink(os.path.abspath(f), dest)
+
+          names = [os.path.basename(f).replace(".trades.jsonl.gz","").replace(".trades.jsonl","") for f in assigned]
+          only = ",".join(names)
+          
+          cmd = ["python3","backtest/drawdown_study.py","--only",only,"--workers","1"]
+          print(f"\nRunning: {' '.join(cmd)}")
+          r = subprocess.run(cmd)
+          if r.returncode != 0:
+              sys.exit(r.returncode)
+          
+          print(f"\nWorker {wid} done. Results:")
+          for n in names:
+              p = f"backtest/results/drawdown_study/{n}.drawdown.json"
+              if os.path.exists(p):
+                  sz = os.path.getsize(p)
+                  print(f"  {n}.drawdown.json ({sz} bytes)")
+              else:
+                  # Check if combined results exist
+                  combined = "backtest/results/drawdown_study/drawdown_study.json"
+                  if os.path.exists(combined):
+                      print(f"  drawdown_study.json (combined)")
+                  else:
+                      print(f"  {n}.drawdown.json MISSING")
+          PYEOF
+
+      - name: Upload drawdown results
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawdown-worker-${{ matrix.worker_id }}
+          path: backtest/results/drawdown_study/
+          retention-days: 7
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: compute
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all worker results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p all_results
+          for i in $(seq 0 19); do
+            dir="worker-$i"
+            mkdir -p "$dir"
+            gh run download ${{ github.run_id }} \
+              --repo "${{ github.repository }}" \
+              --name "drawdown-worker-$i" \
+              --dir "$dir/" 2>/dev/null && \
+              cp "$dir"/*.json all_results/ 2>/dev/null || true
+          done
+          echo "Collected $(ls all_results/*.json 2>/dev/null | wc -l) result files"
+          ls -la all_results/
+
+      - name: Merge and build comparison report
+        run: |
+          python3 - <<'PYEOF'
+          import glob, json, os, sys
+          from collections import defaultdict
+
+          results = []
+          for p in sorted(glob.glob("all_results/*.json")):
+              try:
+                  with open(p) as f:
+                      data = json.load(f)
+                  if isinstance(data, list):
+                      results.extend(data)
+                  elif isinstance(data, dict) and "strategy" in data:
+                      results.append(data)
+              except Exception as e:
+                  print(f"WARN: skipping {p}: {e}")
+
+          valid = [r for r in results if "error" not in r]
+          errors = [r for r in results if "error" in r]
+          print(f"Merged {len(valid)} results, {len(errors)} errors")
+
+          if not valid:
+              print("ERROR: no valid results found")
+              sys.exit(1)
+
+          # Group by strategy
+          by_strat = defaultdict(list)
+          for r in valid:
+              by_strat[r["strategy"]].append(r)
+
+          lines = ["# Drawdown Study: Fixed vs Dynamic Sizing vs Equity Curve\n",
+                   "## Per-Strategy Comparison\n",
+                   "| Strategy | Mode | PnL | Return% | MaxDD% | Sharpe | WR | PF | Trades | Skipped% |",
+                   "|---|---|---|---|---|---|---|---|---|---|"]
+          
+          for strat, cfgs in sorted(by_strat.items()):
+              for r in sorted(cfgs, key=lambda x: x["mode"]):
+                  pf = r.get("profit_factor") or "inf"
+                  lines.append(
+                      f"| {strat[:50]} | {r['mode']} | ${r['total_pnl']:,.0f} | {r['return_pct']:.1f}% | "
+                      f"{r['max_dd_pct']:.1f}% | {r['sharpe_per_trade']:.4f} | "
+                      f"{100*r['win_rate']:.1f}% | {pf} | {r['n_trades_taken']:,} | {r.get('skip_pct',0):.1f}% |")
+              lines.append(f"| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+
+          # Average improvement summary
+          lines.append("\n## Average Improvement vs Baseline\n")
+          lines.append("| Mode | Avg ΔPnL% | Avg ΔMaxDD% | Avg ΔSharpe | Median ΔMaxDD% |")
+          lines.append("|---|---|---|---|---|")
+          
+          modes = ["equity_curve", "drawdown_gate", "combined"]
+          mode_labels = {"equity_curve": "Equity Curve", "drawdown_gate": "DD Gate", "combined": "Combined"}
+          
+          for mode in modes:
+              dp_list, dd_list, ds_list = [], [], []
+              for strat, cfgs in by_strat.items():
+                  bl = next((r for r in cfgs if r["mode"] == "fixed"), None)
+                  tr = next((r for r in cfgs if r["mode"] == mode), None)
+                  if bl and tr:
+                      dp_list.append(tr["return_pct"] - bl["return_pct"])
+                      dd_list.append(tr["max_dd_pct"] - bl["max_dd_pct"])
+                      ds_list.append(tr["sharpe_per_trade"] - bl["sharpe_per_trade"])
+              if dp_list:
+                  import numpy as np
+                  lines.append(f"| {mode_labels[mode]} | {np.mean(dp_list):+.1f}% | {np.mean(dd_list):+.1f}% | {np.mean(ds_list):+.4f} | {np.median(dd_list):+.1f}% |")
+
+          # Recommendations
+          lines.append("\n## Recommendations\n")
+          best_fixed = max(valid, key=lambda r: r.get("total_pnl", 0) if r.get("mode") == "fixed" else 0)
+          best_combined = max(valid, key=lambda r: r.get("total_pnl", 0) if r.get("mode") == "both" else 0)
+          if best_fixed and best_combined:
+              dd_reduction = best_fixed["max_dd_pct"] - best_combined["max_dd_pct"]
+              lines.append(f"- **Best fixed**: {best_fixed['strategy']} — PnL=${best_fixed['total_pnl']:,.0f}, MaxDD={best_fixed['max_dd_pct']:.1f}%")
+              lines.append(f"- **Best combined**: {best_combined['strategy']} — PnL=${best_combined['total_pnl']:,.0f}, MaxDD={best_combined['max_dd_pct']:.1f}%")
+              lines.append(f"- **Drawdown reduction**: {dd_reduction:+.1f}% points")
+
+          report = "\n".join(lines)
+          os.makedirs("merged", exist_ok=True)
+          with open("merged/drawdown_study.json", "w") as f:
+              json.dump(valid, f, indent=1)
+          with open("merged/drawdown_study.md", "w") as f:
+              f.write(report + "\n")
+
+          print(report)
+          print(f"\nWrote merged/drawdown_study.json + merged/drawdown_study.md")
+          PYEOF
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawdown-study-report
+          path: merged/
+          retention-days: 30
