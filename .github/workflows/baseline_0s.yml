@@ -1,0 +1,24 @@
+name: baseline-0s
+on:
+  workflow_dispatch:
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        strategy:
+          - tf_dema_lb20_dev002_emax85_alp0001
+          - tf_vwap_ticks_lb50_dev002_emax80
+          - tf_holt_lb50_dev002_emax85_alp0002_hol0005
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install numpy pandas pyarrow
+      - run: tar xzf sample_2k.tar.gz
+      - name: Run 0s baseline
+        run: python3 driver.py --mode backtest --market-data-dir sample_2k --compact-input --is-file is_files_2k.txt --strategy ${{ matrix.strategy }} --opening-window-sec 0 --result-file result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: baseline-${{ matrix.strategy }}
+          path: result.json
