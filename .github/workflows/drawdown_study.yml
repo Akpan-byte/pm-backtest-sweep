@@ -202,8 +202,8 @@ jobs:
           lines.append("| Mode | Avg ΔPnL% | Avg ΔMaxDD% | Avg ΔSharpe | Median ΔMaxDD% |")
           lines.append("|---|---|---|---|---|")
           
-          modes = ["equity_curve", "drawdown_gate", "combined"]
-          mode_labels = {"equity_curve": "Equity Curve", "drawdown_gate": "DD Gate", "combined": "Combined"}
+          modes = ["sizing_reduction", "kelly_sizing", "equity_curve", "drawdown_gate", "combined"]
+          mode_labels = {"sizing_reduction": "Size Reduction", "kelly_sizing": "Kelly Sizing", "equity_curve": "Equity Curve", "drawdown_gate": "DD Gate", "combined": "Combined"}
           
           for mode in modes:
               dp_list, dd_list, ds_list = [], [], []

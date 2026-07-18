@@ -190,6 +190,100 @@ def simulate_combined(pnls: list, sma_period: int = 100, dd_threshold_pct: float
     return _metrics(taken, n, skipped)
 
 
+def simulate_sizing_reduction(pnls: list, reduction_pct: float = 50.0) -> dict:
+    """Scale PnL down during drawdowns (linear reduction).
+    
+    When equity is in drawdown from peak, scale position size by:
+      factor = max(0.25, 1 - dd_pct * reduction_pct / 100)
+    
+    This reduces PnL during drawdowns, lowering MaxDD while keeping
+    most PnL during normal periods. More practical than skipping trades.
+    """
+    n = len(pnls)
+    equity = CAPITAL
+    peak = CAPITAL
+    scaled_pnls = []
+    
+    for pnl in pnls:
+        dd_pct = 100 * (peak - equity) / peak if peak > 0 else 0
+        # Linear reduction: at 20% DD, factor = 1 - 0.20*0.5 = 0.90
+        # At 40% DD, factor = 1 - 0.40*0.5 = 0.80
+        factor = max(0.25, 1.0 - dd_pct * reduction_pct / 10000.0)
+        scaled_pnl = pnl * factor
+        scaled_pnls.append(scaled_pnl)
+        equity += scaled_pnl
+        if equity > peak:
+            peak = equity
+    
+    return _metrics(scaled_pnls, n, 0)
+
+
+def simulate_kelly_sizing(pnls: list, kelly_fraction: float = 0.25, window: int = 500) -> dict:
+    """Dynamic Kelly sizing: scale positions based on recent win rate.
+    
+    Uses rolling win rate and avg win/loss to compute Kelly fraction,
+    then scales PnL accordingly. Quarter-Kelly (0.25x) is conservative.
+    """
+    n = len(pnls)
+    equity = CAPITAL
+    peak = CAPITAL
+    
+    buf = deque(maxlen=window)
+    buf_wins = 0
+    buf_sum_pos = 0.0
+    buf_sum_neg = 0.0
+    buf_count_pos = 0
+    buf_count_neg = 0
+    
+    scaled_pnls = []
+    base_risk = 0.005  # 0.5%
+    
+    for pnl in pnls:
+        # Update rolling window
+        old = buf[0] if len(buf) == window else None
+        is_win = 1 if pnl > 0 else 0
+        buf.append(pnl)
+        
+        if old is not None:
+            buf_wins -= 1 if old > 0 else 0
+            if old > 0:
+                buf_sum_pos -= old
+                buf_count_pos -= 1
+            elif old < 0:
+                buf_sum_neg -= (-old)
+                buf_count_neg -= 1
+        
+        buf_wins += is_win
+        if pnl > 0:
+            buf_sum_pos += pnl
+            buf_count_pos += 1
+        elif pnl < 0:
+            buf_sum_neg += (-pnl)
+            buf_count_neg += 1
+        
+        # Compute Kelly fraction
+        buflen = len(buf)
+        if buflen >= 100 and buf_count_pos > 0 and buf_count_neg > 0:
+            w = buf_wins / buflen
+            avg_w = buf_sum_pos / buf_count_pos
+            avg_l = buf_sum_neg / buf_count_neg
+            b = avg_w / avg_l if avg_l > 0 else 1.0
+            q = 1.0 - w
+            kelly = max(0.0, (w * b - q) / b) if b > 0 else 0.0
+            risk_pct = min(0.010, max(0.001, kelly * kelly_fraction))
+        else:
+            risk_pct = base_risk
+        
+        factor = risk_pct / base_risk
+        scaled_pnl = pnl * factor
+        scaled_pnls.append(scaled_pnl)
+        equity += scaled_pnl
+        if equity > peak:
+            peak = equity
+    
+    return _metrics(scaled_pnls, n, 0)
+
+
 def run_one_strategy(args):
     """Load data once, run all configs for one strategy."""
     name, path, configs = args
@@ -210,6 +304,10 @@ def run_one_strategy(args):
         elif mode == "combined":
             r = simulate_combined(pnls, sma_period=cfg.get("sma_period", 100),
                                   dd_threshold_pct=cfg.get("dd_threshold", 10.0))
+        elif mode == "sizing_reduction":
+            r = simulate_sizing_reduction(pnls, reduction_pct=cfg.get("reduction", 50.0))
+        elif mode == "kelly_sizing":
+            r = simulate_kelly_sizing(pnls, kelly_fraction=cfg.get("kelly_fraction", 0.25))
         else:
             r = simulate_fixed(pnls)
         r["strategy"] = name
@@ -245,11 +343,10 @@ def main():
     
     configs = [
         {"mode": "fixed", "label": "Baseline (fixed 0.5%)"},
-        {"mode": "equity_curve", "sma_period": 100, "label": "Equity Curve SMA-100"},
-        {"mode": "equity_curve", "sma_period": 50, "label": "Equity Curve SMA-50"},
-        {"mode": "drawdown_gate", "dd_threshold": 10.0, "label": "DD Gate 10%"},
-        {"mode": "drawdown_gate", "dd_threshold": 15.0, "label": "DD Gate 15%"},
-        {"mode": "combined", "sma_period": 100, "dd_threshold": 10.0, "label": "Combined (SMA-100 + DD-10%)"},
+        {"mode": "sizing_reduction", "reduction": 50.0, "label": "Size -50% during DD"},
+        {"mode": "sizing_reduction", "reduction": 75.0, "label": "Size -75% during DD"},
+        {"mode": "kelly_sizing", "kelly_fraction": 0.25, "label": "Quarter Kelly"},
+        {"mode": "kelly_sizing", "kelly_fraction": 0.125, "label": "1/8 Kelly"},
     ]
     
     jobs = []
