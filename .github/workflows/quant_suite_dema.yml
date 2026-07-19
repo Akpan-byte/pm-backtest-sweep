@@ -20,23 +20,30 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install numpy
+        run: pip install numpy
       - name: Download trade tarballs
         run: |
           mkdir -p trades
           for part in 1 2 3 4 5; do
             echo "Downloading part $part..."
-            gh release download quant-data-v1 \
-              --repo Akpan-byte/pm-backtest-sweep \
-              --pattern "trades-part${part}.tar.gz" \
-              --output "trades-part${part}.tar.gz" || true
+            wget -q --tries=3 --timeout=120 \
+              "https://github.com/Akpan-byte/pm-backtest-sweep/releases/download/quant-data-v1/trades-part${part}.tar.gz" \
+              -O "trades-part${part}.tar.gz"
           done
-          ls -lh trades-part*.tar.gz 2>/dev/null
+          ls -lh trades-part*.tar.gz
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify tarballs
+        run: |
+          for part in 1 2 3 4 5; do
+            echo -n "Part $part: "
+            tar tzf "trades-part${part}.tar.gz" 2>&1 | head -1 || echo "CORRUPT"
+          done | head -20
       - name: Extract DEMA PnLs (streaming, low memory)
         run: |
-          python3 -c "
-          import gzip, json, os, io, tarfile, struct
+          python3 << 'PYEOF'
+          import gzip, json, os, tarfile
           
           STRATEGY = 'tf_dema_lb20_dev002_emax85_alp0001'
           pnls = []
@@ -46,30 +53,42 @@ jobs:
               if not os.path.exists(tgz):
                   print(f'Skip {tgz}')
                   continue
-              print(f'Processing {tgz}...')
-              with tarfile.open(tgz, 'r:gz') as tar:
-                  count_before = len(pnls)
-                  for member in tar:
-                      if not member.name.endswith('.trades.jsonl.gz'):
-                          continue
-                      f = tar.extractfile(member)
-                      if f is None:
-                          continue
-                      with gzip.open(f, 'rt') as gz:
-                          for line in gz:
-                              try:
-                                  rec = json.loads(line)
-                                  if rec.get('strategy') == STRATEGY:
-                                      pnls.append(float(rec['pnl']))
-                              except (json.JSONDecodeError, KeyError):
-                                  continue
-                  print(f'  After part {part}: {len(pnls)} DEMA trades (+{len(pnls)-count_before})')
+              print(f'Processing {tgz}...', flush=True)
+              count_before = len(pnls)
+              try:
+                  with tarfile.open(tgz, 'r:gz') as tar:
+                      for member in tar:
+                          if not member.name.endswith('.trades.jsonl.gz'):
+                              continue
+                          f = tar.extractfile(member)
+                          if f is None:
+                              continue
+                          try:
+                              with gzip.open(f, 'rt') as gz:
+                                  for line in gz:
+                                      try:
+                                          rec = json.loads(line)
+                                          if rec.get('strategy') == STRATEGY:
+                                              pnls.append(float(rec['pnl']))
+                                      except (json.JSONDecodeError, KeyError):
+                                          continue
+                          except EOFError:
+                              print(f'  Warning: truncated file {member.name}')
+                              continue
+                  print(f'  After part {part}: {len(pnls)} DEMA trades (+{len(pnls)-count_before})', flush=True)
+              except Exception as e:
+                  print(f'  Error on {tgz}: {e}', flush=True)
+                  continue
+          
+          if not pnls:
+              print('ERROR: No DEMA trades found!', flush=True)
+              raise SystemExit(1)
           
           import numpy as np
           arr = np.array(pnls, dtype=np.float64)
           np.save('dema_pnls.npy', arr)
-          print(f'Saved {len(arr)} DEMA trades to dema_pnls.npy ({os.path.getsize(\"dema_pnls.npy\")/1024/1024:.1f} MB)')
-          "
+          print(f'Saved {len(arr)} DEMA trades to dema_pnls.npy ({os.path.getsize("dema_pnls.npy")/1024/1024:.1f} MB)', flush=True)
+          PYEOF
       - name: Upload DEMA PnLs
         uses: actions/upload-artifact@v4
         with:
@@ -130,6 +149,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: quant-dema-report
-          path: |
-            quant_dema_20k_full.json
+          path: quant_dema_20k_full.json
           retention-days: 30
