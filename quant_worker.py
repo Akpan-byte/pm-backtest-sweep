@@ -16,16 +16,23 @@ BASE_RISK = 0.005
 STRATEGY = "tf_dema_lb20_dev002_emax85_alp0001"
 
 def load_pnls_from_tarball():
-    """Load DEMA per-trade PnLs from the trade tarballs."""
+    """Load DEMA per-trade PnLs from precomputed numpy array."""
+    npy_path = "dema_pnls.npy"
+    if os.path.exists(npy_path):
+        pnls = np.load(npy_path)
+        print(f"Loaded {len(pnls)} DEMA trades from {npy_path}")
+        return pnls
+    
+    # Fallback: load from trade files
     trades_dir = "trades"
     if not os.path.exists(trades_dir):
-        print("ERROR: trades/ directory not found. Run download step first.", file=sys.stderr)
+        print("ERROR: dema_pnls.npy or trades/ not found.", file=sys.stderr)
         sys.exit(1)
     
     import glob
     files = sorted(glob.glob(f"{trades_dir}/*.trades.jsonl.gz"))
     if not files:
-        print(f"ERROR: No .trades.jsonl.gz files in {trades_dir}/", file=sys.stderr)
+        print(f"ERROR: No files found", file=sys.stderr)
         sys.exit(1)
     
     print(f"Loading PnLs from {len(files)} trade files...")

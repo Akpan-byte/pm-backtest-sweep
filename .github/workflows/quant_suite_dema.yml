@@ -13,10 +13,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  download-data:
+  extract-pnls:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Download trade tarballs
         run: |
           mkdir -p trades
@@ -27,27 +30,55 @@ jobs:
               --pattern "trades-part${part}.tar.gz" \
               --output "trades-part${part}.tar.gz" || true
           done
-          echo "Downloaded parts:"
-          ls -lh trades-part*.tar.gz 2>/dev/null || echo "No parts found"
+          ls -lh trades-part*.tar.gz 2>/dev/null
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract tarballs
+      - name: Extract DEMA PnLs (streaming, low memory)
         run: |
-          for f in trades-part*.tar.gz; do
-            [ -f "$f" ] && tar xzf "$f" -C trades/ 2>/dev/null || true
-          done
-          echo "Trade files:"
-          ls trades/*.trades.jsonl.gz 2>/dev/null | wc -l
-      - name: Upload trades artifact
+          python3 -c "
+          import gzip, json, os, io, tarfile, struct
+          
+          STRATEGY = 'tf_dema_lb20_dev002_emax85_alp0001'
+          pnls = []
+          
+          for part in range(1, 6):
+              tgz = f'trades-part{part}.tar.gz'
+              if not os.path.exists(tgz):
+                  print(f'Skip {tgz}')
+                  continue
+              print(f'Processing {tgz}...')
+              with tarfile.open(tgz, 'r:gz') as tar:
+                  count_before = len(pnls)
+                  for member in tar:
+                      if not member.name.endswith('.trades.jsonl.gz'):
+                          continue
+                      f = tar.extractfile(member)
+                      if f is None:
+                          continue
+                      with gzip.open(f, 'rt') as gz:
+                          for line in gz:
+                              try:
+                                  rec = json.loads(line)
+                                  if rec.get('strategy') == STRATEGY:
+                                      pnls.append(float(rec['pnl']))
+                              except (json.JSONDecodeError, KeyError):
+                                  continue
+                  print(f'  After part {part}: {len(pnls)} DEMA trades (+{len(pnls)-count_before})')
+          
+          import numpy as np
+          arr = np.array(pnls, dtype=np.float64)
+          np.save('dema_pnls.npy', arr)
+          print(f'Saved {len(arr)} DEMA trades to dema_pnls.npy ({os.path.getsize(\"dema_pnls.npy\")/1024/1024:.1f} MB)')
+          "
+      - name: Upload DEMA PnLs
         uses: actions/upload-artifact@v4
         with:
-          name: trade-data
-          path: trades/
+          name: dema-pnls
+          path: dema_pnls.npy
           retention-days: 1
-          compression-level: 0
 
   worker:
-    needs: download-data
+    needs: extract-pnls
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -60,11 +91,10 @@ jobs:
           python-version: '3.11'
       - name: Install numpy
         run: pip install numpy
-      - name: Download trade data
+      - name: Download DEMA PnLs
         uses: actions/download-artifact@v4
         with:
-          name: trade-data
-          path: trades/
+          name: dema-pnls
       - name: Run worker ${{ matrix.worker_id }}
         run: python quant_worker.py --worker-id ${{ matrix.worker_id }} --total-workers 20 --total-mc 20000 --total-bootstrap 20000
       - name: Upload worker result
@@ -102,5 +132,4 @@ jobs:
           name: quant-dema-report
           path: |
             quant_dema_20k_full.json
-            quant_worker_results/
           retention-days: 30
