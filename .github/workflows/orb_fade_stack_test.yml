@@ -72,8 +72,10 @@ jobs:
               'tf_hint':b['tf_hint'],'max_reentries':5,'_max_reentries':5,
               'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
           "
-            # IS backtest
-            python3 run_is.py --files /tmp/is_files_btc_compact.txt --workers 8 --compact --fill taker --only btc_$LEG
+            # IS backtest — use BT_EXTRA_STRATEGIES so run_is.py finds the per-leg strategy
+            BT_EXTRA_STRATEGIES=coin_full_registry_btc.json \
+              BT_ONLY_EXTRA_REGISTRY=1 \
+              python3 run_is.py --files /tmp/is_files_btc_compact.txt --workers 8 --compact --fill taker
             # Apply orb_fade filter
             python3 apply_orb_fade_filters.py --leg $LEG
             echo "=== Done $LEG ==="
