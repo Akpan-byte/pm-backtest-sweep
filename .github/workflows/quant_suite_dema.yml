@@ -83,16 +83,14 @@ jobs:
           print(f"Found DEMA file: {dema_file}")
           print(f"Size: {os.path.getsize(dema_file)/1048576:.1f} MB")
           
-          # Load PnLs
+          # Load PnLs — each file IS one strategy, no filter needed
           pnls = []
           t0 = time.time()
           try:
               with gzip.open(dema_file, "rt") as fh:
                   for line in fh:
                       try:
-                          rec = json.loads(line)
-                          if rec.get("strategy") == STRATEGY:
-                              pnls.append(float(rec["pnl"]))
+                          pnls.append(float(json.loads(line)["pnl"]))
                       except (json.JSONDecodeError, KeyError):
                           continue
           except EOFError:
