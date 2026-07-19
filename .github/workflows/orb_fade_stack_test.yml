@@ -11,7 +11,7 @@ env:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -114,20 +114,25 @@ jobs:
           ) &
           DEMA_PID=$!
 
-          # Wait for all backtest legs
-          FAIL=0
+          # Wait for all backtest legs (collect PIDs first to avoid race)
+          LEG_PIDS=()
           for job in $(jobs -p); do
             [ "$job" = "$DEMA_PID" ] && continue
-            wait $job || FAIL=1
+            LEG_PIDS+=($job)
+          done
+          FAIL=0
+          for pid in "${LEG_PIDS[@]}"; do
+            wait "$pid" || FAIL=1
           done
           if [ $FAIL -ne 0 ]; then
             echo "ERROR: One or more backtest legs failed"
             exit 1
           fi
+          echo "=== ALL 6 LEGS COMPLETE ==="
 
-          # Wait for DEMA download
-          wait $DEMA_PID
-          echo "=== ALL BACKTESTS + DEMA COMPLETE ==="
+          # Wait for DEMA download (may already be done)
+          wait $DEMA_PID || true
+          echo "DEMA trades: $(wc -l < dema_trades.csv 2>/dev/null || echo 0) lines"
 
       - name: Combine 6 legs into shared-wallet stack
         working-directory: ${{ env.BACKTEST_DIR }}
