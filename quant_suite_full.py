@@ -1,9 +1,41 @@
-#!/usr/bin/env python3"""Full institutional-grade quant suite for DEMA — fast, memory-safe."""
+#!/usr/bin/env python3
+"""Full institutional-grade quant suite for DEMA — fast, memory-safe."""
 import json, os, time
 import numpy as np
 from math import erf, sqrt
 
 CAPITAL = 200.0
+
+def calculate_psr(returns, benchmark_sr=0.0):
+    """Probabilistic Sharpe Ratio — probability that true SR > benchmark_sr."""
+    n = len(returns)
+    if n < 4:
+        return 0.5
+    m = float(np.mean(returns))
+    s = float(np.std(returns, ddof=1))
+    if s == 0:
+        return 0.0
+    sr = m / s
+    skew = float(((returns - m) ** 3).mean()) / (s ** 3) if s > 0 else 0
+    kurt = float(((returns - m) ** 4).mean()) / (s ** 4) if s > 0 else 3
+    var_sr = (1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr ** 2) / (n - 1.0)
+    if var_sr <= 0:
+        return 0.5
+    t_stat = (sr - benchmark_sr) / np.sqrt(var_sr)
+    return float(0.5 * (1 + erf(t_stat / sqrt(2))))
+
+def calculate_dsr(returns, all_sharpes):
+    """Deflated Sharpe Ratio — adjusts PSR for selection bias (multiple testing)."""
+    from scipy.stats import norm
+    n_trials = len(all_sharpes)
+    if n_trials <= 1:
+        return calculate_psr(returns, 0.0)
+    std_sharpe = float(np.std(all_sharpes, ddof=1))
+    if std_sharpe == 0:
+        return calculate_psr(returns, 0.0)
+    alpha_n = float(norm.ppf(1.0 - 1.0 / n_trials))
+    expected_max_sr = std_sharpe * alpha_n
+    return calculate_psr(returns, expected_max_sr)
 
 def load():
     arr = np.load("dema_pnls.npy")
@@ -187,11 +219,17 @@ def main():
     print("Bootstrap 20k...")
     bs = bootstrap(pnls, 20000)
 
+    # PSR: probability true SR > 0
+    psr = calculate_psr(pnls, benchmark_sr=0.0)
+    # DSR: adjust for selection bias (tested 4 strategies)
+    all_sharpes = [0.0259, 0.0223, 0.0092, 0.0072]  # DEMA, DEMA_rV1, HOLT, VWAP_rV2
+    dsr = calculate_dsr(pnls, all_sharpes)
+
     report = {
         "strategy": "tf_dema_lb20_dev002_emax85_alp0001",
         "core": core,
         "drawdown": dd,
-        "risk": {**sh, "psr": 1.0, "dsr": 1.0},
+        "risk": {**sh, "psr": psr, "dsr": dsr},
         "markov": mk,
         "bayesian": by,
         "regressions": rg,
@@ -212,6 +250,8 @@ def main():
     print(f"  Profit Factor: {core['profit_factor']:.4f}")
     print(f"  Max DD:        {dd['max_dd_pct']:.1f}%")
     print(f"  Sharpe:        {sh['sharpe']:.4f}")
+    print(f"  PSR:           {psr:.4f}")
+    print(f"  DSR:           {dsr:.4f}")
     print(f"\n--- Monte Carlo 20k ---")
     print(f"  P(Ruin):       {mc['p_ruin']:.4f}")
     print(f"  Median Equity: ${mc['median_equity']:,.2f}")
