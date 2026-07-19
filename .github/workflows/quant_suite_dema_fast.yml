@@ -14,45 +14,69 @@ jobs:
       - name: Install numpy
         run: pip install numpy
 
-      - name: Download + extract + run quant suite
+      - name: Extract DEMA PnLs + run quant suite
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p dl trades
+          mkdir -p dl
+
+          echo "=== Disk before download ==="
+          df -h /
 
           echo "=== Downloading tarballs ==="
           gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
-          ls -lh dl/
 
-          echo "=== Extracting tarballs ==="
-          for tar in dl/*.tar.gz; do
-            tar xzf "$tar" -C trades/ 2>/dev/null || true
-          done
-          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
+          echo "=== Disk after download ==="
+          df -h /
 
-          echo "=== Finding DEMA file ==="
-          DEMA_FILE=$(find trades/ -name "tf_dema_lb20_dev002_emax85_alp0001.trades.jsonl.gz" -type f | head -1)
-          echo "File: $DEMA_FILE"
-          ls -lh "$DEMA_FILE"
+          echo "=== Streaming DEMA PnLs directly from tarballs (no disk extraction) ==="
+          TARGET="tf_dema_lb20_dev002_emax85_alp0001.trades.jsonl.gz"
 
-          echo "=== Extracting PnLs at C speed ==="
-          # zcat is C-level decompression, pipe to python for fast extraction
-          zcat "$DEMA_FILE" | python3 -c "
-          import sys, json
-          pnls = []
-          append = pnls.append
-          for line in sys.stdin:
-              try:
-                  append(float(json.loads(line)['pnl']))
-              except:
-                  pass
-          # Write as space-separated for fast loading
+          python3 -c "
+          import tarfile, gzip, json, os, sys
           import numpy as np
+
+          STRATEGY_FILE = '$TARGET'
+          pnls = []
+
+          for part in range(1, 6):
+              tgz = f'dl/trades-part{part}.tar.gz'
+              if not os.path.exists(tgz):
+                  continue
+              print(f'Scanning {tgz}...', flush=True)
+              with tarfile.open(tgz, 'r:gz') as tar:
+                  for member in tar:
+                      if member.name.endswith(STRATEGY_FILE) and 'rV' not in member.name and 'rC' not in member.name and 'rD' not in member.name:
+                          print(f'  Found: {member.name}', flush=True)
+                          fobj = tar.extractfile(member)
+                          if fobj is None:
+                              continue
+                          count = 0
+                          with gzip.open(fobj, 'rt', errors='replace') as gz:
+                              for line in gz:
+                                  try:
+                                      pnls.append(float(json.loads(line)['pnl']))
+                                      count += 1
+                                  except:
+                                      continue
+                          print(f'  Loaded {count} trades', flush=True)
+                          break  # only need one file per tarball
+
+          if not pnls:
+              print('ERROR: No trades found!', flush=True)
+              sys.exit(1)
+
           arr = np.array(pnls, dtype=np.float64)
           np.save('dema_pnls.npy', arr)
-          print(f'Extracted {len(arr)} trades ({arr.nbytes/1048576:.1f} MB)')
+          print(f'Total: {len(arr)} trades ({arr.nbytes/1048576:.1f} MB)', flush=True)
           "
+
+          echo "=== Disk after extraction ==="
+          df -h /
+
+          echo "=== Cleaning up tarballs to free disk ==="
+          rm -rf dl/
 
           echo "=== Running quant suite ==="
           python3 quant_suite_full.py
