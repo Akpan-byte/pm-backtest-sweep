@@ -51,6 +51,7 @@ jobs:
           BT_IS_DIR: is_bn
           BT_REF_BTC_1M_DIR: ${{ env.REF_BN_DIR }}
           BT_REF_FEED: binance
+          PM_BOOK_DIR: ${{ env.BTC_RAW_DIR }}
         run: |
           for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l5m_mom30 l5m_liqpull60 l3m_bbpct40; do
             echo "=== Running $LEG ==="
@@ -116,8 +117,11 @@ jobs:
 
       - name: Run quant suite on stack and stack+DEMA
         working-directory: ${{ env.BACKTEST_DIR }}
+        env:
+          BT_IS_DIR: is_bn
+          BT_Q_DIR: quant_bn
         run: |
-          python3 quant_suite.py --only btc_b1m_liqpull40 btc_b1m_imbslope30 btc_b1m_chand40 btc_l5m_mom30 btc_l5m_liqpull60 btc_l3m_bbpct40 --workers 8 --fill taker
+          python3 quant_suite.py --only btc_b1m_liqpull40,btc_b1m_imbslope30,btc_b1m_chand40,btc_l5m_mom30,btc_l5m_liqpull60,btc_l3m_bbpct40 --workers 8 --fill taker
 
       - name: Portfolio comparison (stack alone vs stack+DEMA)
         run: |
