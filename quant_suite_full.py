@@ -22,8 +22,7 @@ def monte_carlo(pnls, n=20000):
     ruins = 0
     
     for i in range(n):
-        perm = rng.choice(n_t, size=SAMPLE, replace=False)
-        s = pnls[perm]
+        s = pnls[rng.randint(0, n_t, size=SAMPLE)]
         eq = np.empty(SAMPLE + 1)
         eq[0] = CAPITAL
         np.cumsum(s, out=eq[1:])
