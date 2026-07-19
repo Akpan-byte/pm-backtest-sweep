@@ -1,10 +1,9 @@
-#!/usr/bin/env python3"""Full institutional-grade quant suite for DEMA — single process, numpy-vectorized."""
+#!/usr/bin/env python3"""Full institutional-grade quant suite for DEMA — numpy-vectorized."""
 import json, os, time
 import numpy as np
 from math import erf, sqrt
 
 CAPITAL = 200.0
-RISK = 0.005
 
 def load():
     arr = np.load("dema_pnls.npy")
@@ -15,24 +14,46 @@ def monte_carlo(pnls, n=20000):
     rng = np.random.RandomState(42)
     n_t = len(pnls)
     ruin = CAPITAL * 0.025
-    eqs, mdds, ruins = [], [], 0
     t0 = time.time()
-    for _ in range(n):
-        perm = rng.permutation(n_t)
-        eq, peak, mdd = CAPITAL, CAPITAL, 0.0
-        hit = False
-        for idx in perm:
-            eq += pnls[idx]
-            if eq > peak: peak = eq
-            dd = (peak - eq) / peak if peak > 0 else 0
-            if dd > mdd: mdd = dd
-            if eq <= ruin: hit = True
-        eqs.append(eq)
-        mdds.append(mdd * peak)
-        if hit: ruins += 1
+    
+    # Pre-generate all permutations as 2D array: (n_runs, n_trades)
+    # Then vectorize equity curve computation
+    eqs = np.empty(n)
+    mdds = np.empty(n)
+    ruins = 0
+    
+    BATCH = 500  # process 500 runs at a time to manage memory
+    for bstart in range(0, n, BATCH):
+        bend = min(bstart + BATCH, n)
+        bsz = bend - bstart
+        
+        # Generate batch of permutations
+        perms = np.array([rng.permutation(n_t) for _ in range(bsz)])
+        
+        # Gather PnLs for all permutations at once: (bsz, n_trades)
+        gathered = np.take(pnls, perms)
+        
+        # Equity curves: cumsum along axis 1, prepend CAPITAL
+        eq_curves = CAPITAL + np.concatenate([np.zeros((bsz, 1)), np.cumsum(gathered, axis=1)], axis=1)
+        
+        # Peak = cummax along axis 1
+        peaks = np.maximum.accumulate(eq_curves, axis=1)
+        
+        # Drawdowns
+        dds = (peaks - eq_curves) / np.where(peaks > 0, peaks, 1)
+        
+        # Final equity
+        eqs[bstart:bend] = eq_curves[:, -1]
+        
+        # Max drawdown per run (in dollars)
+        max_dd_pct = np.max(dds, axis=1)
+        max_dd_peak = peaks[np.arange(bsz), np.argmax(dds, axis=1)]
+        mdds[bstart:bend] = max_dd_pct * max_dd_peak
+        
+        # Ruin count
+        ruins += int(np.any(eq_curves <= ruin, axis=1).sum())
+    
     print(f"  MC {n} runs: {time.time()-t0:.1f}s")
-    eqs = np.array(eqs)
-    mdds = np.array(mdds)
     return {
         "n_runs": n,
         "p_ruin": ruins / n,
@@ -49,18 +70,28 @@ def monte_carlo(pnls, n=20000):
 def bootstrap(pnls, n=20000):
     rng = np.random.RandomState(42)
     n_t = len(pnls)
-    pnl_s, sharpe_s, wr_s = [], [], []
     t0 = time.time()
-    for _ in range(n):
-        s = pnls[rng.choice(n_t, size=n_t, replace=True)]
-        pnl_s.append(float(np.sum(s)))
-        m, sd = np.mean(s), np.std(s)
-        sharpe_s.append(float(m / sd if sd > 0 else 0))
-        wr_s.append(float(np.mean(s > 0)))
+    
+    BATCH = 500
+    pnl_s = np.empty(n)
+    sharpe_s = np.empty(n)
+    wr_s = np.empty(n)
+    
+    for bstart in range(0, n, BATCH):
+        bend = min(bstart + BATCH, n)
+        bsz = bend - bstart
+        
+        # Generate batch of sample indices
+        indices = rng.randint(0, n_t, size=(bsz, n_t))
+        gathered = np.take(pnls, indices)
+        
+        pnl_s[bstart:bend] = np.sum(gathered, axis=1)
+        means = np.mean(gathered, axis=1)
+        stds = np.std(gathered, axis=1)
+        sharpe_s[bstart:bend] = np.where(stds > 0, means / stds, 0)
+        wr_s[bstart:bend] = np.mean(gathered > 0, axis=1)
+    
     print(f"  Bootstrap {n} runs: {time.time()-t0:.1f}s")
-    pnl_s = np.array(pnl_s)
-    sharpe_s = np.array(sharpe_s)
-    wr_s = np.array(wr_s)
     return {
         "n_runs": n,
         "pnl_median": float(np.median(pnl_s)),
@@ -100,27 +131,26 @@ def drawdown_stats(pnls):
     equity = np.cumsum(np.concatenate([[CAPITAL], pnls]))
     peak = np.maximum.accumulate(equity)
     dd = (peak - equity) / np.where(peak > 0, peak, 1)
-    max_dd_pct = float(np.max(dd)) * 100
-    max_dd_usd = float(np.max(peak - equity))
-    underwater = dd > 0
     return {
-        "max_dd_pct": max_dd_pct,
-        "max_dd_usd": max_dd_usd,
-        "pct_time_underwater": float(np.mean(underwater)),
+        "max_dd_pct": float(np.max(dd)) * 100,
+        "max_dd_usd": float(np.max(peak - equity)),
+        "pct_time_underwater": float(np.mean(dd > 0)),
     }
 
 def sharpe(pnls):
     m, s = np.mean(pnls), np.std(pnls)
-    return {"sharpe": float(m / s) if s > 0 else 0, "sortino": float(m / np.std(pnls[pnls < 0])) if np.any(pnls < 0) else 0}
+    neg = pnls[pnls < 0]
+    return {
+        "sharpe": float(m / s) if s > 0 else 0,
+        "sortino": float(m / np.std(neg)) if len(neg) > 0 else 0,
+    }
 
 def markov(pnls):
     w = pnls > 0
-    ww = wl = lw = ll = 0
-    for i in range(len(w) - 1):
-        if w[i] and w[i+1]: ww += 1
-        elif w[i]: wl += 1
-        elif w[i+1]: lw += 1
-        else: ll += 1
+    ww = int(np.sum(w[:-1] & w[1:]))
+    wl = int(np.sum(w[:-1] & ~w[1:]))
+    lw = int(np.sum(~w[:-1] & w[1:]))
+    ll = int(np.sum(~w[:-1] & ~w[1:]))
     wt, lt = ww + wl, lw + ll
     return {
         "p_win_after_win": ww / wt if wt else 0,
@@ -151,41 +181,25 @@ def regressions(pnls):
         c = np.polyfit(x, eq, deg)
         yp = np.polyval(c, x)
         r2 = 1 - np.sum((eq - yp) ** 2) / ss_tot if ss_tot > 0 else 0
-        results[name] = {"r2": float(r2), "slope": float(c[-2]) if deg == 1 else None}
+        results[name] = {"r2": float(r2)}
     return results
 
 def brownian(pnls):
-    m, s = np.mean(pnls), np.std(pnls)
-    return {
-        "drift": float(m),
-        "vol": float(s),
-        "sharpe_ratio": float(m / s) if s > 0 else 0,
-    }
+    m, s = float(np.mean(pnls)), float(np.std(pnls))
+    return {"drift": m, "vol": s, "sharpe_ratio": m / s if s > 0 else 0}
 
 def main():
     t_total = time.time()
     pnls = load()
 
-    print("Core metrics...")
     core = core_metrics(pnls)
     print(f"  Win rate: {core['win_rate']:.4f}, PF: {core['profit_factor']:.4f}")
 
-    print("Drawdown stats...")
     dd = drawdown_stats(pnls)
-
-    print("Sharpe...")
     sh = sharpe(pnls)
-
-    print("Markov...")
     mk = markov(pnls)
-
-    print("Bayesian...")
     by = bayesian(pnls)
-
-    print("Regressions...")
     rg = regressions(pnls)
-
-    print("Brownian...")
     br = brownian(pnls)
 
     print("Monte Carlo 20k...")
