@@ -1,0 +1,58 @@
+name: Quant Suite 20k DEMA (Fast)
+
+on: workflow_dispatch
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install numpy
+        run: pip install numpy
+
+      - name: Download + extract + run quant suite
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl trades
+
+          echo "=== Downloading tarballs ==="
+          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
+          ls -lh dl/
+
+          echo "=== Extracting tarballs ==="
+          for tar in dl/*.tar.gz; do
+            tar xzf "$tar" -C trades/ 2>/dev/null || true
+          done
+          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
+
+          echo "=== Finding DEMA file ==="
+          DEMA_FILE=$(find trades/ -name "tf_dema_lb20_dev002_emax85_alp0001.trades.jsonl.gz" -type f | head -1)
+          echo "File: $DEMA_FILE"
+          ls -lh "$DEMA_FILE"
+
+          echo "=== Extracting PnLs at C speed ==="
+          # zcat is C-level decompression, pipe to python for fast extraction
+          zcat "$DEMA_FILE" | python3 -c "
+          import sys, json
+          pnls = []
+          append = pnls.append
+          for line in sys.stdin:
+              try:
+                  append(float(json.loads(line)['pnl']))
+              except:
+                  pass
+          # Write as space-separated for fast loading
+          import numpy as np
+          arr = np.array(pnls, dtype=np.float64)
+          np.save('dema_pnls.npy', arr)
+          print(f'Extracted {len(arr)} trades ({arr.nbytes/1048576:.1f} MB)')
+          "
+
+          echo "=== Running quant suite ==="
+          python3 quant_suite_full.py
