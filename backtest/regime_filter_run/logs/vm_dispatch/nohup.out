@@ -1,0 +1,5 @@
+dispatching workers [0, 1, 2] (parallel=3) total_workers=39
+worker 1: EXIT:-15 (log /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/logs/vm_dispatch/worker_01.log)
+worker 0: EXIT:-15 (log /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/logs/vm_dispatch/worker_00.log)
+worker 2: EXIT:-15 (log /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/logs/vm_dispatch/worker_02.log)
+dispatch_local done

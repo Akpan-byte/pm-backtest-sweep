@@ -1,0 +1,124 @@
+2026-07-17T11:12:31Z orchestrator start: 125 expected jobs
+2026-07-17T11:12:31Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:12:32Z laptop status = {'done': 17, 'missing': 108}
+2026-07-17T11:12:32Z gha status = in_progress
+2026-07-17T11:13:32Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:13:33Z laptop status = {'done': 17, 'missing': 108}
+2026-07-17T11:13:34Z gha status = in_progress
+2026-07-17T11:14:34Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:14:34Z laptop status = {'done': 19, 'missing': 106}
+2026-07-17T11:14:35Z gha status = in_progress
+2026-07-17T11:15:35Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:15:35Z laptop status = {'done': 23, 'missing': 102}
+2026-07-17T11:15:36Z gha status = in_progress
+2026-07-17T11:16:36Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:16:37Z laptop status = {'done': 27, 'missing': 98}
+2026-07-17T11:16:37Z gha status = in_progress
+2026-07-17T11:17:37Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:17:38Z laptop status = {'done': 28, 'missing': 97}
+2026-07-17T11:17:38Z gha status = in_progress
+2026-07-17T11:18:38Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:18:39Z laptop status = {'done': 31, 'missing': 94}
+2026-07-17T11:18:40Z gha status = in_progress
+2026-07-17T11:19:40Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:19:41Z laptop status = {'done': 32, 'missing': 93}
+2026-07-17T11:19:41Z gha status = in_progress
+2026-07-17T11:20:41Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:20:42Z laptop status = {'done': 32, 'missing': 93}
+2026-07-17T11:20:42Z gha status = in_progress
+2026-07-17T11:21:42Z local done=6 missing=119 | laptop_collected=False gha_collected=False
+2026-07-17T11:21:43Z laptop status = {'done': 32, 'missing': 93}
+2026-07-17T11:21:43Z gha status = success
+2026-07-17T11:21:43Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+error downloading regime-partial-32: error extracting zip archive: error extracting "tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json": open /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts/regime-partial-32/tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json: file exists
+Traceback (most recent call last):
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 54, in <module>
+    main()
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 37, in main
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gh', 'run', 'download', '29575222994', '--repo', 'Akpan-byte/lead-sites', '--pattern', 'regime-partial-*', '--dir', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts']' returned non-zero exit status 1.
+2026-07-17T11:22:00Z gha collection failed: Command '['/lsiopy/bin/python3', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py', '29575222994']' returned non-zero exit status 1.
+2026-07-17T11:23:00Z local done=7 missing=118 | laptop_collected=False gha_collected=False
+2026-07-17T11:23:00Z laptop status = {'done': 32, 'missing': 93}
+2026-07-17T11:23:01Z gha status = success
+2026-07-17T11:23:01Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+error downloading regime-partial-32: error extracting zip archive: error extracting "tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json": open /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts/regime-partial-32/tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json: file exists
+Traceback (most recent call last):
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 54, in <module>
+    main()
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 37, in main
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gh', 'run', 'download', '29575222994', '--repo', 'Akpan-byte/lead-sites', '--pattern', 'regime-partial-*', '--dir', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts']' returned non-zero exit status 1.
+2026-07-17T11:23:13Z gha collection failed: Command '['/lsiopy/bin/python3', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py', '29575222994']' returned non-zero exit status 1.
+2026-07-17T11:24:13Z local done=7 missing=118 | laptop_collected=False gha_collected=False
+2026-07-17T11:24:14Z laptop status = {'done': 33, 'missing': 92}
+2026-07-17T11:24:15Z gha status = success
+2026-07-17T11:24:15Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+error downloading regime-partial-32: error extracting zip archive: error extracting "tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json": open /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts/regime-partial-32/tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json: file exists
+Traceback (most recent call last):
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 54, in <module>
+    main()
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 37, in main
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gh', 'run', 'download', '29575222994', '--repo', 'Akpan-byte/lead-sites', '--pattern', 'regime-partial-*', '--dir', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts']' returned non-zero exit status 1.
+2026-07-17T11:24:30Z gha collection failed: Command '['/lsiopy/bin/python3', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py', '29575222994']' returned non-zero exit status 1.
+2026-07-17T11:25:30Z local done=9 missing=116 | laptop_collected=False gha_collected=False
+2026-07-17T11:25:31Z laptop status = {'done': 37, 'missing': 88}
+2026-07-17T11:25:31Z gha status = success
+2026-07-17T11:25:31Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+error downloading regime-partial-32: error extracting zip archive: error extracting "tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json": open /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts/regime-partial-32/tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json: file exists
+Traceback (most recent call last):
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 54, in <module>
+    main()
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 37, in main
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gh', 'run', 'download', '29575222994', '--repo', 'Akpan-byte/lead-sites', '--pattern', 'regime-partial-*', '--dir', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts']' returned non-zero exit status 1.
+2026-07-17T11:25:45Z gha collection failed: Command '['/lsiopy/bin/python3', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py', '29575222994']' returned non-zero exit status 1.
+2026-07-17T11:26:45Z local done=9 missing=116 | laptop_collected=False gha_collected=False
+2026-07-17T11:26:45Z laptop status = {'done': 42, 'missing': 83}
+2026-07-17T11:26:46Z gha status = success
+2026-07-17T11:26:46Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+error downloading regime-partial-32: error extracting zip archive: error extracting "tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json": open /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts/regime-partial-32/tf_dema_lb20_dev002_emax85_alp0001_rV1_chunk02.summary.json: file exists
+Traceback (most recent call last):
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 54, in <module>
+    main()
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 37, in main
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gh', 'run', 'download', '29575222994', '--repo', 'Akpan-byte/lead-sites', '--pattern', 'regime-partial-*', '--dir', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts']' returned non-zero exit status 1.
+2026-07-17T11:27:01Z gha collection failed: Command '['/lsiopy/bin/python3', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py', '29575222994']' returned non-zero exit status 1.
+2026-07-17T11:28:01Z local done=9 missing=116 | laptop_collected=False gha_collected=False
+2026-07-17T11:28:01Z laptop status = {'done': 47, 'missing': 78}
+2026-07-17T11:28:02Z gha status = success
+2026-07-17T11:28:02Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+error downloading regime-partial-21: error extracting zip archive: error extracting "tf_alma_lb50_dev002_emax80_alm0075_alm6_rV4_chunk01.summary.json": open /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts/regime-partial-21/tf_alma_lb50_dev002_emax80_alm0075_alm6_rV4_chunk01.summary.json: file exists
+Traceback (most recent call last):
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 58, in <module>
+    main()
+  File "/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py", line 41, in main
+    subprocess.run(cmd, check=True)
+  File "/usr/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['gh', 'run', 'download', '29575222994', '--repo', 'Akpan-byte/lead-sites', '--pattern', 'regime-partial-*', '--dir', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts']' returned non-zero exit status 1.
+2026-07-17T11:32:35Z gha collection failed: Command '['/lsiopy/bin/python3', '/config/worktrees/kilo_regime_filter/backtest/regime_filter_run/collect_gha_partials.py', '29575222994']' returned non-zero exit status 1.
+2026-07-17T11:33:35Z local done=9 missing=116 | laptop_collected=False gha_collected=False
+2026-07-17T11:33:35Z laptop status = {'done': 53, 'missing': 72}
+2026-07-17T11:33:35Z gha status = success
+2026-07-17T11:33:35Z collecting GitHub Actions partials
+running: gh run download 29575222994 --repo Akpan-byte/lead-sites --pattern regime-partial-* --dir /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/gha_artifacts
+collected 120 partial files into /config/worktrees/kilo_regime_filter/backtest/regime_filter_run/partials

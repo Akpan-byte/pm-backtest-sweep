@@ -1,0 +1,183 @@
+name: BTC ORB Fade Stack + DEMA Portfolio Test
+
+on: workflow_dispatch
+
+env:
+  BTC_COMPACT_DIR: /tmp/btc5m_compact
+  BTC_RAW_DIR: /tmp/btc5m_all
+  REF_BN_DIR: /tmp/ref_btc_1m
+  BACKTEST_DIR: backtest
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install numpy pandas requests redis zstandard scipy
+
+      - name: Install rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+
+      - name: Configure rclone
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF_B64 }}" | base64 -d > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+
+      - name: Download BTC 5m + Binance reference
+        run: |
+          mkdir -p ${{ env.BTC_RAW_DIR }} ${{ env.REF_BN_DIR }}
+          rclone copy gdrive:polybacktest_60d/polymarket/btc/5m/ ${{ env.BTC_RAW_DIR }}/ --transfers 16 --checkers 32 --fast-list &
+          rclone copy gdrive:trading_backtest/reference/binance/btc/spot/klines_1m/ ${{ env.REF_BN_DIR }}/ --transfers 16 --fast-list &
+          wait
+          echo "raw: $(ls ${{ env.BTC_RAW_DIR }} | wc -l) ref: $(ls ${{ env.REF_BN_DIR }} | wc -l)"
+
+      - name: Compactify + Build index
+        working-directory: ${{ env.BACKTEST_DIR }}
+        run: |
+          python3 compactify.py
+          python3 build_index_coin_compact.py btc ${{ env.BTC_COMPACT_DIR }} is_index_compact.json.gz --workers 3
+          ls ${{ env.BTC_COMPACT_DIR }}/*.pkl.gz > /tmp/is_files_btc_compact.txt
+          echo "compact: $(wc -l < /tmp/is_files_btc_compact.txt)"
+
+      - name: Run all 6 orb_fade legs IS backtest
+        working-directory: ${{ env.BACKTEST_DIR }}
+        env:
+          BT_IS_DIR: is_bn
+          BT_REF_BTC_1M_DIR: ${{ env.REF_BN_DIR }}
+          BT_REF_FEED: binance
+        run: |
+          for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l5m_mom30 l5m_liqpull60 l3m_bbpct40; do
+            echo "=== Running $LEG ==="
+            # Generate per-leg registry
+            python3 -c "
+          import json
+          LEG='$LEG'
+          BASES={
+            'b1m_liqpull40':{'tf_hint':'1m','filter':{'feat':'PM_liq_pull20','op':'<','thr':40}},
+            'b1m_imbslope30':{'tf_hint':'1m','filter':{'feat':'PM_imb_slope20','op':'<','thr':30}},
+            'b1m_chand40':{'tf_hint':'1m','filter':{'feat':'IND_chand22_1d','op':'>','thr':40}},
+            'l5m_mom30':{'tf_hint':'5m','filter':{'feat':'IND_mom30_1d','op':'<','thr':80}},
+            'l5m_liqpull60':{'tf_hint':'5m','filter':{'feat':'PM_liq_pull20','op':'<','thr':60}},
+            'l3m_bbpct40':{'tf_hint':'3m','filter':{'feat':'IND_bbpct20_1d','op':'>','thr':40}},
+          }
+          b=BASES[LEG]
+          with open('coin_full_registry_btc.json','w') as f:
+            json.dump({f'btc_{LEG}':{'module':'phase_2.daily_orb_v5','fn':'daily_orb_v5_signal',
+              'tf_hint':b['tf_hint'],'max_reentries':5,'_max_reentries':5,
+              'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
+          "
+            # IS backtest
+            python3 run_is.py --files /tmp/is_files_btc_compact.txt --workers 8 --compact --fill taker --only btc_$LEG
+            # Apply orb_fade filter
+            python3 apply_orb_fade_filters.py --leg $LEG
+            echo "=== Done $LEG ==="
+          done
+
+      - name: Combine 6 legs into shared-wallet stack
+        working-directory: ${{ env.BACKTEST_DIR }}
+        run: |
+          python3 combine_orb_fade_full_stack.py results/is_bn
+
+      - name: Download DEMA trades from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dl
+          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "trades-part4.tar.gz" --dir dl/
+          python3 -c "
+          import tarfile, gzip, json, os
+          pnls = []
+          with tarfile.open('dl/trades-part4.tar.gz','r:gz') as tar:
+              for m in tar:
+                  if m.name.endswith('tf_dema_lb20_dev002_emax85_alp0001.trades.jsonl.gz') and 'rV' not in m.name:
+                      f=tar.extractfile(m)
+                      with gzip.open(f,'rt',errors='replace') as gz:
+                          for line in gz:
+                              try: pnls.append(json.loads(line))
+                              except: pass
+                      break
+          import csv
+          with open('dema_trades.csv','w',newline='') as csvf:
+              w=csv.DictWriter(csvf,fieldnames=['opened_at','closed_at','entry_price','shares','pnl','direction','condition_id'])
+              w.writeheader()
+              for t in pnls:
+                  w.writerow({k:t.get(k,'') for k in ['opened_at','closed_at','entry_price','shares','pnl','direction','condition_id']})
+          print(f'DEMA: {len(pnls)} trades')
+          "
+          rm -rf dl/
+
+      - name: Run quant suite on stack and stack+DEMA
+        working-directory: ${{ env.BACKTEST_DIR }}
+        run: |
+          python3 quant_suite.py --only btc_b1m_liqpull40 btc_b1m_imbslope30 btc_b1m_chand40 btc_l5m_mom30 btc_l5m_liqpull60 btc_l3m_bbpct40 --workers 8 --fill taker
+
+      - name: Portfolio comparison (stack alone vs stack+DEMA)
+        run: |
+          python3 -c "
+          import json, glob, os
+
+          # Load individual leg quant results
+          legs = ['b1m_liqpull40','b1m_imbslope30','b1m_chand40','l5m_mom30','l5m_liqpull60','l3m_bbpct40']
+          leg_results = {}
+          for leg in legs:
+              path = f'backtest/results/quant_bn/btc_{leg}.quant.json'
+              if os.path.exists(path):
+                  with open(path) as f:
+                      leg_results[leg] = json.load(f)
+
+          # Combined stack metrics
+          total_pnl = sum(r.get('core',{}).get('total_pnl',0) for r in leg_results.values())
+          total_trades = sum(r.get('n_trades',0) for r in leg_results.values())
+          avg_wr = sum(r.get('core',{}).get('win_rate',0)*r.get('n_trades',0) for r in leg_results.values())/total_trades if total_trades else 0
+          avg_pf = sum(r.get('core',{}).get('profit_factor',0) for r in leg_results.values())/len(leg_results) if leg_results else 0
+          avg_sharpe = sum(r.get('risk',{}).get('sharpe_per_trade',0) for r in leg_results.values())/len(leg_results) if leg_results else 0
+
+          print('='*60)
+          print('6-LEG ORB FADE STACK (IS, Binance)')
+          print('='*60)
+          print(f'  Legs: {len(legs)}')
+          print(f'  Total trades: {total_trades:,}')
+          print(f'  Total PnL: \${total_pnl:,.2f}')
+          print(f'  Avg WR: {avg_wr:.4f}')
+          print(f'  Avg PF: {avg_pf:.4f}')
+          print(f'  Avg Sharpe: {avg_sharpe:.4f}')
+          print()
+
+          report = {
+              'stack_only': {
+                  'legs': legs,
+                  'total_trades': total_trades,
+                  'total_pnl': round(total_pnl,2),
+                  'avg_win_rate': round(avg_wr,4),
+                  'avg_pf': round(avg_pf,4),
+                  'avg_sharpe': round(avg_sharpe,4),
+                  'per_leg': {k: {
+                      'trades': v.get('n_trades',0),
+                      'pnl': v.get('core',{}).get('total_pnl',0),
+                      'wr': v.get('core',{}).get('win_rate',0),
+                      'pf': v.get('core',{}).get('profit_factor',0),
+                      'sharpe': v.get('risk',{}).get('sharpe_per_trade',0),
+                  } for k,v in leg_results.items()}
+              }
+          }
+          with open('stack_comparison.json','w') as f:
+              json.dump(report,f,indent=2)
+          "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orb-fade-stack-results
+          path: |
+            backtest/results/is_bn/
+            backtest/results/quant_bn/
+            backtest/reports/
+            stack_comparison.json
+          retention-days: 3
