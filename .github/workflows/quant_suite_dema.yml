@@ -13,112 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  inspect-tarballs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download trade tarballs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dl
-          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
-          ls -lh dl/
-      - name: Inspect tarball structure
-        run: |
-          for tar in dl/*.tar.gz; do
-            echo "=== $tar ==="
-            echo "Size: $(du -h "$tar" | cut -f1)"
-            echo "First 20 entries:"
-            tar tzf "$tar" 2>/dev/null | head -20
-            echo "Total entries: $(tar tzf "$tar" 2>/dev/null | wc -l)"
-            echo ""
-          done
-
-  extract-pnls:
-    needs: inspect-tarballs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install numpy
-        run: pip install numpy
-      - name: Download trade tarballs
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dl
-          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
-          ls -lh dl/
-      - name: Extract DEMA PnLs via streaming
-        run: |
-          python3 << 'PYEOF'
-          import gzip, json, os, tarfile
-          
-          STRATEGY = 'tf_dema_lb20_dev002_emax85_alp0001'
-          pnls = []
-          
-          for part in range(1, 6):
-              tgz = f'dl/trades-part{part}.tar.gz'
-              if not os.path.exists(tgz):
-                  # try without dl/ prefix
-                  tgz = f'trades-part{part}.tar.gz'
-              if not os.path.exists(tgz):
-                  print(f'Skip part {part}: file not found')
-                  continue
-              
-              size_mb = os.path.getsize(tgz) / 1024 / 1024
-              print(f'Processing part {part} ({size_mb:.0f}MB)...', flush=True)
-              count_before = len(pnls)
-              
-              try:
-                  with tarfile.open(tgz, 'r:gz') as tar:
-                      for member in tar:
-                          if not member.name.endswith('.trades.jsonl.gz'):
-                              continue
-                          fobj = tar.extractfile(member)
-                          if fobj is None:
-                              continue
-                          try:
-                              with gzip.open(fobj, 'rt', errors='replace') as gz:
-                                  for line in gz:
-                                      try:
-                                          rec = json.loads(line)
-                                          if rec.get('strategy') == STRATEGY:
-                                              pnls.append(float(rec['pnl']))
-                                      except (json.JSONDecodeError, KeyError):
-                                          continue
-                          except (EOFError, OSError) as e:
-                              print(f'  Warning: truncated {member.name}: {e}')
-                              continue
-                  added = len(pnls) - count_before
-                  print(f'  Part {part}: +{added} DEMA trades (total: {len(pnls)})', flush=True)
-              except Exception as e:
-                  print(f'  ERROR on part {part}: {e}', flush=True)
-                  continue
-          
-          if not pnls:
-              print("ERROR: No DEMA trades found!", flush=True)
-              raise SystemExit(1)
-          
-          import numpy as np
-          arr = np.array(pnls, dtype=np.float64)
-          np.save("dema_pnls.npy", arr)
-          mb = os.path.getsize("dema_pnls.npy") / 1024 / 1024
-          print(f"\nSaved {len(arr)} DEMA trades ({mb:.1f} MB)", flush=True)
-          PYEOF
-      - name: Upload DEMA PnLs
-        uses: actions/upload-artifact@v4
-        with:
-          name: dema-pnls
-          path: dema_pnls.npy
-          retention-days: 1
-
   worker:
-    needs: extract-pnls
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     strategy:
       matrix:
         worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
@@ -130,12 +27,214 @@ jobs:
           python-version: '3.11'
       - name: Install numpy
         run: pip install numpy
-      - name: Download DEMA PnLs
-        uses: actions/download-artifact@v4
-        with:
-          name: dema-pnls
-      - name: Run worker ${{ matrix.worker_id }}
-        run: python quant_worker.py --worker-id ${{ matrix.worker_id }} --total-workers 20 --total-mc 20000 --total-bootstrap 20000
+
+      - name: Download trade tarballs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl trades
+          echo "Downloading tarballs..."
+          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
+          echo "Extracting..."
+          for tar in dl/*.tar.gz; do
+            tar xzf "$tar" -C trades/ 2>/dev/null || true
+          done
+          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
+          echo "Trade files found: $(ls trades/*.trades.jsonl.gz 2>/dev/null | wc -l)"
+          ls -la trades/*dema* 2>/dev/null || echo "Checking for dema files..."
+          find trades/ -name "*dema*" -type f 2>/dev/null | head -5
+
+      - name: Extract DEMA PnLs and run quant suite
+        run: |
+          python3 << 'PYEOF'
+          import gzip, json, os, glob, sys, time
+          import numpy as np
+
+          STRATEGY = 'tf_dema_lb20_dev002_emax85_alp0001'
+          CAPITAL = 200.0
+
+          # Find DEMA trade files
+          files = sorted(glob.glob("trades/*.trades.jsonl.gz"))
+          if not files:
+              files = sorted(glob.glob("trades/**/*.trades.jsonl.gz", recursive=True))
+          
+          # Also check for the specific DEMA file
+          dema_file = None
+          for f in files:
+              if STRATEGY in os.path.basename(f):
+                  dema_file = f
+                  break
+          
+          if not dema_file:
+              # Try broader search
+              for f in glob.glob("trades/**/*dema*lb20*", recursive=True):
+                  if f.endswith('.trades.jsonl.gz') or f.endswith('.trades.jsonl'):
+                      dema_file = f
+                      break
+          
+          if not dema_file:
+              print(f"ERROR: Cannot find DEMA trade file. Files found: {len(files)}")
+              for f in files[:5]:
+                  print(f"  {f}")
+              sys.exit(1)
+          
+          print(f"Found DEMA file: {dema_file}")
+          print(f"Size: {os.path.getsize(dema_file)/1048576:.1f} MB")
+          
+          # Load PnLs
+          pnls = []
+          t0 = time.time()
+          try:
+              with gzip.open(dema_file, "rt") as fh:
+                  for line in fh:
+                      try:
+                          rec = json.loads(line)
+                          if rec.get("strategy") == STRATEGY:
+                              pnls.append(float(rec["pnl"]))
+                      except (json.JSONDecodeError, KeyError):
+                          continue
+          except EOFError:
+              print("Warning: file truncated, using partial data")
+          
+          pnls = np.array(pnls, dtype=np.float64)
+          print(f"Loaded {len(pnls)} DEMA trades in {time.time()-t0:.1f}s")
+          
+          if len(pnls) < 100:
+              print(f"ERROR: Too few trades ({len(pnls)})")
+              sys.exit(1)
+
+          wid = int("${{ matrix.worker_id }}")
+          nwk = 20
+          total_mc = 20000
+          total_bs = 20000
+
+          mc_per = total_mc // nwk
+          mc_start = wid * mc_per
+          mc_count = mc_per if wid < nwk - 1 else total_mc - mc_start
+
+          bs_per = total_bs // nwk
+          bs_start = wid * bs_per
+          bs_count = bs_per if wid < nwk - 1 else total_bs - bs_start
+
+          print(f"Worker {wid}: MC {mc_count}, BS {bs_count}")
+
+          # Monte Carlo
+          rng = np.random.RandomState(42 + wid)
+          n_trades = len(pnls)
+          ruin_level = CAPITAL * 0.025
+          BASE_RISK = 0.005
+
+          final_eq = []
+          max_dds = []
+          ruin_count = 0
+          t0 = time.time()
+          for i in range(mc_count):
+              perm = rng.permutation(n_trades)
+              eq = CAPITAL
+              peak = CAPITAL
+              mdd = 0.0
+              hit_ruin = False
+              for idx in perm:
+                  eq += pnls[idx] * BASE_RISK / 0.005
+                  if eq > peak: peak = eq
+                  dd = (peak - eq) / peak if peak > 0 else 0
+                  if dd > mdd: mdd = dd
+                  if eq <= ruin_level: hit_ruin = True
+              final_eq.append(eq)
+              max_dds.append(mdd * peak)
+              if hit_ruin: ruin_count += 1
+          print(f"  MC done in {time.time()-t0:.1f}s")
+
+          # Bootstrap
+          bs_pnl = []
+          bs_sharpe = []
+          bs_wr = []
+          t0 = time.time()
+          for i in range(bs_count):
+              sample = rng.choice(n_trades, size=n_trades, replace=True)
+              sp = pnls[sample]
+              bs_pnl.append(float(np.sum(sp)))
+              mean = np.mean(sp)
+              std = np.std(sp)
+              bs_sharpe.append(float(mean / std if std > 0 else 0))
+              bs_wr.append(float(np.mean(sp > 0)))
+          print(f"  Bootstrap done in {time.time()-t0:.1f}s")
+
+          # Markov
+          wins = pnls > 0
+          ww = wl = lw = ll = 0
+          for i in range(n_trades - 1):
+              if wins[i] and wins[i+1]: ww += 1
+              elif wins[i] and not wins[i+1]: wl += 1
+              elif not wins[i] and wins[i+1]: lw += 1
+              else: ll += 1
+          wt = ww + wl
+          lt = lw + ll
+          markov = {
+              "p_win_after_win": ww / wt if wt > 0 else 0,
+              "p_loss_after_win": wl / wt if wt > 0 else 0,
+              "p_win_after_loss": lw / lt if lt > 0 else 0,
+              "p_loss_after_loss": ll / lt if lt > 0 else 0,
+              "stationary_win_rate": float(np.mean(wins)),
+          }
+
+          # Bayesian
+          a = int(np.sum(wins)) + 1
+          b = int(np.sum(~wins)) + 1
+          pm = a / (a + b)
+          var = (a * b) / ((a + b) ** 2 * (a + b + 1))
+          std_b = var ** 0.5
+          from math import erf, sqrt
+          p_gt = 0.5 * (1 + erf((pm - 0.5) / (std_b * sqrt(2)))) if std_b > 0 else 1.0
+          bayesian = {
+              "winrate_post_mean": pm,
+              "winrate_ci_2.5": max(0, pm - 1.96 * std_b),
+              "winrate_ci_97.5": min(1, pm + 1.96 * std_b),
+              "p_winrate_gt_0.5": p_gt,
+          }
+
+          # Regressions
+          equity = np.cumsum(np.concatenate([[CAPITAL], pnls * BASE_RISK / 0.005]))
+          x = np.arange(len(equity))
+          ss_tot = np.sum((equity - np.mean(equity)) ** 2)
+          slope, intercept = np.polyfit(x, equity, 1)
+          y_pred = slope * x + intercept
+          r2_lin = 1 - np.sum((equity - y_pred) ** 2) / ss_tot if ss_tot > 0 else 0
+
+          result = {
+              "worker_id": wid,
+              "n_trades": n_trades,
+              "mc": {
+                  "final_equities": final_eq,
+                  "max_dds": max_dds,
+                  "ruin_count": ruin_count,
+                  "n_runs": mc_count,
+              },
+              "bootstrap": {
+                  "pnl_samples": bs_pnl,
+                  "sharpe_samples": bs_sharpe,
+                  "winrate_samples": bs_wr,
+                  "n_runs": bs_count,
+              },
+              "markov": markov,
+              "bayesian": bayesian,
+              "regressions": {
+                  "linear_slope": float(slope),
+                  "linear_r2": float(r2_lin),
+              },
+          }
+
+          os.makedirs("quant_worker_results", exist_ok=True)
+          with open(f"quant_worker_results/worker_{wid:02d}.json", "w") as f:
+              json.dump(result, f)
+          print(f"Saved worker {wid} results")
+
+          # Also save the PnL array for reuse
+          np.save("dema_pnls.npy", pnls)
+          print(f"Saved dema_pnls.npy ({len(pnls)} trades)")
+          PYEOF
+
       - name: Upload worker result
         uses: actions/upload-artifact@v4
         with:
