@@ -54,22 +54,23 @@ jobs:
           STRATEGY = 'tf_dema_lb20_dev002_emax85_alp0001'
           CAPITAL = 200.0
 
-          # Find DEMA trade files
-          files = sorted(glob.glob("trades/*.trades.jsonl.gz"))
-          if not files:
-              files = sorted(glob.glob("trades/**/*.trades.jsonl.gz", recursive=True))
-          
-          # Also check for the specific DEMA file
+          # Find exact DEMA trade file
+          target_name = f"{STRATEGY}.trades.jsonl.gz"
           dema_file = None
-          for f in files:
-              if STRATEGY in os.path.basename(f):
-                  dema_file = f
+          for root, dirs, fnames in os.walk("trades"):
+              for fn in fnames:
+                  if fn == target_name:
+                      dema_file = os.path.join(root, fn)
+                      break
+              if dema_file:
                   break
           
           if not dema_file:
-              # Try broader search
-              for f in glob.glob("trades/**/*dema*lb20*", recursive=True):
-                  if f.endswith('.trades.jsonl.gz') or f.endswith('.trades.jsonl'):
+              # Fallback: search all files
+              all_files = glob.glob("trades/**/*.trades.jsonl.gz", recursive=True)
+              for f in all_files:
+                  bn = os.path.basename(f)
+                  if bn == target_name or bn == f"{STRATEGY}.trades.jsonl":
                       dema_file = f
                       break
           
