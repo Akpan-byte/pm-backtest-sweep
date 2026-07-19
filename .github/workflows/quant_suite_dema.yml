@@ -13,7 +13,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  inspect-tarballs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download trade tarballs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dl
+          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
+          ls -lh dl/
+      - name: Inspect tarball structure
+        run: |
+          for tar in dl/*.tar.gz; do
+            echo "=== $tar ==="
+            echo "Size: $(du -h "$tar" | cut -f1)"
+            echo "First 20 entries:"
+            tar tzf "$tar" 2>/dev/null | head -20
+            echo "Total entries: $(tar tzf "$tar" 2>/dev/null | wc -l)"
+            echo ""
+          done
+
   extract-pnls:
+    needs: inspect-tarballs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,59 +45,69 @@ jobs:
           python-version: '3.11'
       - name: Install numpy
         run: pip install numpy
-      - name: Download and extract trade data
+      - name: Download trade tarballs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          mkdir -p trades dl
-          
-          echo "Downloading trade tarballs..."
+          mkdir -p dl
           gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "*.tar.gz" --dir dl/
-          
-          echo "Extracting..."
-          for tar in dl/*.tar.gz; do
-            tar xzf "$tar" --strip-components=6 -C trades/ 2>/dev/null || \
-            tar xzf "$tar" -C trades/ 2>/dev/null || true
-          done
-          
-          find . -name "*.trades.jsonl.gz" -not -path "./trades/*.trades.jsonl.gz" -exec mv {} trades/ \; 2>/dev/null || true
-          echo "Total trade files: $(ls trades/*.trades.jsonl.gz 2>/dev/null | wc -l)"
-      - name: Extract DEMA PnLs
+          ls -lh dl/
+      - name: Extract DEMA PnLs via streaming
         run: |
           python3 << 'PYEOF'
-          import gzip, json, os, glob
+          import gzip, json, os, tarfile
           
           STRATEGY = 'tf_dema_lb20_dev002_emax85_alp0001'
-          files = sorted(glob.glob("trades/*.trades.jsonl.gz"))
-          files = [f for f in files if os.path.getsize(f) > 1000]
-          print(f"Processing {len(files)} trade files...")
-          
           pnls = []
-          for i, f in enumerate(files):
-              try:
-                  with gzip.open(f, "rt") as fh:
-                      for line in fh:
-                          try:
-                              rec = json.loads(line)
-                              if rec.get("strategy") == STRATEGY:
-                                  pnls.append(float(rec["pnl"]))
-                          except (json.JSONDecodeError, KeyError):
-                              continue
-              except Exception as e:
-                  print(f"  Skip {f}: {e}")
+          
+          for part in range(1, 6):
+              tgz = f'dl/trades-part{part}.tar.gz'
+              if not os.path.exists(tgz):
+                  # try without dl/ prefix
+                  tgz = f'trades-part{part}.tar.gz'
+              if not os.path.exists(tgz):
+                  print(f'Skip part {part}: file not found')
                   continue
-              if (i + 1) % 500 == 0:
-                  print(f"  {i+1}/{len(files)} files, {len(pnls)} DEMA trades so far...")
+              
+              size_mb = os.path.getsize(tgz) / 1024 / 1024
+              print(f'Processing part {part} ({size_mb:.0f}MB)...', flush=True)
+              count_before = len(pnls)
+              
+              try:
+                  with tarfile.open(tgz, 'r:gz') as tar:
+                      for member in tar:
+                          if not member.name.endswith('.trades.jsonl.gz'):
+                              continue
+                          fobj = tar.extractfile(member)
+                          if fobj is None:
+                              continue
+                          try:
+                              with gzip.open(fobj, 'rt', errors='replace') as gz:
+                                  for line in gz:
+                                      try:
+                                          rec = json.loads(line)
+                                          if rec.get('strategy') == STRATEGY:
+                                              pnls.append(float(rec['pnl']))
+                                      except (json.JSONDecodeError, KeyError):
+                                          continue
+                          except (EOFError, OSError) as e:
+                              print(f'  Warning: truncated {member.name}: {e}')
+                              continue
+                  added = len(pnls) - count_before
+                  print(f'  Part {part}: +{added} DEMA trades (total: {len(pnls)})', flush=True)
+              except Exception as e:
+                  print(f'  ERROR on part {part}: {e}', flush=True)
+                  continue
           
           if not pnls:
-              print("ERROR: No DEMA trades found!")
+              print("ERROR: No DEMA trades found!", flush=True)
               raise SystemExit(1)
           
           import numpy as np
           arr = np.array(pnls, dtype=np.float64)
           np.save("dema_pnls.npy", arr)
-          print(f"Saved {len(arr)} DEMA trades ({os.path.getsize('dema_pnls.npy')/1024/1024:.1f} MB)")
+          mb = os.path.getsize("dema_pnls.npy") / 1024 / 1024
+          print(f"\nSaved {len(arr)} DEMA trades ({mb:.1f} MB)", flush=True)
           PYEOF
       - name: Upload DEMA PnLs
         uses: actions/upload-artifact@v4
