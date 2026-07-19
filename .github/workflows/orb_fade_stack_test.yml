@@ -45,20 +45,21 @@ jobs:
           ls ${{ env.BTC_COMPACT_DIR }}/*.pkl.gz > /tmp/is_files_btc_compact.txt
           echo "compact: $(wc -l < /tmp/is_files_btc_compact.txt)"
 
-      - name: Run all 6 orb_fade legs IS backtest
+      - name: Run 6 orb_fade legs (PARALLEL) + DEMA download (CONCURRENT)
         working-directory: ${{ env.BACKTEST_DIR }}
         env:
           BT_IS_DIR: is_bn
           BT_REF_BTC_1M_DIR: ${{ env.REF_BN_DIR }}
           BT_REF_FEED: binance
           PM_BOOK_DIR: ${{ env.BTC_RAW_DIR }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l5m_mom30 l5m_liqpull60 l3m_bbpct40; do
-            echo "=== Running $LEG ==="
-            # Generate per-leg registry
+          run_leg() {
+            local LEG=$1
+            local REGISTRY=coin_full_registry_${LEG}.json
             python3 -c "
           import json
-          LEG='$LEG'
+          LEG='${LEG}'
           BASES={
             'b1m_liqpull40':{'tf_hint':'1m','filter':{'feat':'PM_liq_pull20','op':'<','thr':40}},
             'b1m_imbslope30':{'tf_hint':'1m','filter':{'feat':'PM_imb_slope20','op':'<','thr':30}},
@@ -68,32 +69,28 @@ jobs:
             'l3m_bbpct40':{'tf_hint':'3m','filter':{'feat':'IND_bbpct20_1d','op':'>','thr':40}},
           }
           b=BASES[LEG]
-          with open('coin_full_registry_btc.json','w') as f:
+          with open('${REGISTRY}','w') as f:
             json.dump({f'btc_{LEG}':{'module':'phase_2.daily_orb_v5','fn':'daily_orb_v5_signal',
               'tf_hint':b['tf_hint'],'max_reentries':5,'_max_reentries':5,
               'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
           "
-            # IS backtest — use BT_EXTRA_STRATEGIES so run_is.py finds the per-leg strategy
-            BT_EXTRA_STRATEGIES=coin_full_registry_btc.json \
+            BT_EXTRA_STRATEGIES=${REGISTRY} \
               BT_ONLY_EXTRA_REGISTRY=1 \
-              python3 run_is.py --files /tmp/is_files_btc_compact.txt --workers 8 --compact --fill taker
-            # Apply orb_fade filter
-            python3 apply_orb_fade_filters.py --leg $LEG
+              python3 run_is.py --files /tmp/is_files_btc_compact.txt --workers 2 --compact --fill taker 2>&1
+            python3 apply_orb_fade_filters.py --leg $LEG 2>&1
             echo "=== Done $LEG ==="
+          }
+
+          # Launch all 6 legs in parallel (2 workers each = 12 procs total)
+          for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l5m_mom30 l5m_liqpull60 l3m_bbpct40; do
+            run_leg $LEG &
           done
 
-      - name: Combine 6 legs into shared-wallet stack
-        working-directory: ${{ env.BACKTEST_DIR }}
-        run: |
-          python3 combine_orb_fade_full_stack.py results/is_bn
-
-      - name: Download DEMA trades from release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dl
-          gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "trades-part4.tar.gz" --dir dl/
-          python3 -c "
+          # Launch DEMA download concurrently (independent of backtest)
+          (
+            mkdir -p dl
+            gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "trades-part4.tar.gz" --dir dl/ 2>&1
+            python3 -c "
           import tarfile, gzip, json, os
           pnls = []
           with tarfile.open('dl/trades-part4.tar.gz','r:gz') as tar:
@@ -113,9 +110,31 @@ jobs:
                   w.writerow({k:t.get(k,'') for k in ['opened_at','closed_at','entry_price','shares','pnl','direction','condition_id']})
           print(f'DEMA: {len(pnls)} trades')
           "
-          rm -rf dl/
+            rm -rf dl/
+          ) &
+          DEMA_PID=$!
 
-      - name: Run quant suite on stack and stack+DEMA
+          # Wait for all backtest legs
+          FAIL=0
+          for job in $(jobs -p); do
+            [ "$job" = "$DEMA_PID" ] && continue
+            wait $job || FAIL=1
+          done
+          if [ $FAIL -ne 0 ]; then
+            echo "ERROR: One or more backtest legs failed"
+            exit 1
+          fi
+
+          # Wait for DEMA download
+          wait $DEMA_PID
+          echo "=== ALL BACKTESTS + DEMA COMPLETE ==="
+
+      - name: Combine 6 legs into shared-wallet stack
+        working-directory: ${{ env.BACKTEST_DIR }}
+        run: |
+          python3 combine_orb_fade_full_stack.py results/is_bn
+
+      - name: Run quant suite on all 6 legs
         working-directory: ${{ env.BACKTEST_DIR }}
         env:
           BT_IS_DIR: is_bn
