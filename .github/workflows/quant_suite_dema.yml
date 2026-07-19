@@ -1,0 +1,106 @@
+name: Quant Suite 20k DEMA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'quant_worker.py'
+      - 'quant_merge.py'
+      - '.github/workflows/quant_suite_dema.yml'
+
+concurrency:
+  group: quant-suite-dema
+  cancel-in-progress: true
+
+jobs:
+  download-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download trade tarballs
+        run: |
+          mkdir -p trades
+          for part in 1 2 3 4 5; do
+            echo "Downloading part $part..."
+            gh release download quant-data-v1 \
+              --repo Akpan-byte/pm-backtest-sweep \
+              --pattern "trades-part${part}.tar.gz" \
+              --output "trades-part${part}.tar.gz" || true
+          done
+          echo "Downloaded parts:"
+          ls -lh trades-part*.tar.gz 2>/dev/null || echo "No parts found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract tarballs
+        run: |
+          for f in trades-part*.tar.gz; do
+            [ -f "$f" ] && tar xzf "$f" -C trades/ 2>/dev/null || true
+          done
+          echo "Trade files:"
+          ls trades/*.trades.jsonl.gz 2>/dev/null | wc -l
+      - name: Upload trades artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trade-data
+          path: trades/
+          retention-days: 1
+          compression-level: 0
+
+  worker:
+    needs: download-data
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install numpy
+        run: pip install numpy
+      - name: Download trade data
+        uses: actions/download-artifact@v4
+        with:
+          name: trade-data
+          path: trades/
+      - name: Run worker ${{ matrix.worker_id }}
+        run: python quant_worker.py --worker-id ${{ matrix.worker_id }} --total-workers 20 --total-mc 20000 --total-bootstrap 20000
+      - name: Upload worker result
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-${{ matrix.worker_id }}
+          path: quant_worker_results/
+          retention-days: 1
+
+  merge:
+    needs: worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install numpy
+        run: pip install numpy
+      - name: Download all worker results
+        uses: actions/download-artifact@v4
+        with:
+          path: all_workers/
+      - name: Merge results
+        run: |
+          mkdir -p quant_worker_results
+          for d in all_workers/worker-*/quant_worker_results/; do
+            [ -d "$d" ] && cp "$d"/*.json quant_worker_results/ 2>/dev/null || true
+          done
+          echo "Found $(ls quant_worker_results/worker_*.json 2>/dev/null | wc -l) worker results"
+          python quant_merge.py
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: quant-dema-report
+          path: |
+            quant_dema_20k_full.json
+            quant_worker_results/
+          retention-days: 30
