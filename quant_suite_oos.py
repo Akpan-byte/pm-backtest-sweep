@@ -53,8 +53,10 @@ def extract_oos_pnls():
                         for line in gz:
                             try:
                                 rec = json.loads(line)
-                                closed_at = rec.get("closed_at", 0)
-                                if closed_at >= OOS_TS:
+                                # Filter by market start_date_iso, not closed_at
+                                market = rec.get("market", {})
+                                start_date = market.get("start_date_iso", "")
+                                if start_date >= "2026-07-01":
                                     pnls.append(float(rec["pnl"]))
                                     oos_count += 1
                                 count += 1
