@@ -457,6 +457,7 @@ def daily_orb_v5_signal(
     max_reentries=3,
     max_entry_price=0.85,
     time_gate_seconds=30,
+    or_window_seconds=None,
     **kwargs,
 ):
     """Generate a daily-ORB breakout signal for the given asset.
@@ -511,7 +512,7 @@ def daily_orb_v5_signal(
     newly_finalized = False
     for tf in active_tfs:
         params = TF_PARAMS[tf]
-        or_sec = params["or_seconds"]
+        or_sec = or_window_seconds if or_window_seconds is not None else params["or_seconds"]
         if sec_since_open < or_sec:
             state["or_high"][tf] = max(state["or_high"].get(tf, float("-inf")), spot_price)
             state["or_low"][tf] = min(state["or_low"].get(tf, float("inf")), spot_price)
