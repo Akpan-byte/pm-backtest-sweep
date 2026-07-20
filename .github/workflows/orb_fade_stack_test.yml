@@ -9,9 +9,10 @@ env:
   BACKTEST_DIR: backtest
 
 jobs:
-  run:
+  # ── Phase 1: Download + compactify ──────────────────────────────
+  setup:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,16 +20,13 @@ jobs:
           python-version: '3.11'
       - name: Install deps
         run: pip install numpy pandas requests redis zstandard scipy
-
       - name: Install rclone
         run: curl https://rclone.org/install.sh | sudo bash
-
       - name: Configure rclone
         run: |
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONF_B64 }}" | base64 -d > ~/.config/rclone/rclone.conf
           chmod 600 ~/.config/rclone/rclone.conf
-
       - name: Download BTC 5m + Binance reference + DEMA trades (PARALLEL)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,7 +37,6 @@ jobs:
           gh release download quant-data-v1 --repo "${{ github.repository }}" --pattern "trades-part4.tar.gz" --dir dl/ &
           wait
           echo "raw: $(ls ${{ env.BTC_RAW_DIR }} | wc -l) ref: $(ls ${{ env.REF_BN_DIR }} | wc -l) dl: $(ls dl/ | wc -l)"
-
       - name: Compactify + Build index + Extract DEMA (PARALLEL)
         working-directory: ${{ env.BACKTEST_DIR }}
         run: |
@@ -50,8 +47,35 @@ jobs:
           python3 build_index_coin_compact.py btc ${{ env.BTC_COMPACT_DIR }} is_index_compact.json.gz --workers 3
           ls ${{ env.BTC_COMPACT_DIR }}/*.pkl.gz > /tmp/is_files_btc_compact.txt
           echo "compact: $(wc -l < /tmp/is_files_btc_compact.txt)"
+      - name: Upload compact artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: compact-data
+          path: |
+            /tmp/btc5m_compact/
+            /tmp/is_files_btc_compact.txt
+            backtest/dema_trades.csv
+          retention-days: 1
+          compression-level: 0
 
-      - name: Run 6 orb_fade legs IS backtest (PARALLEL)
+  # ── Phase 2: Fast legs (b1m + l3m) — orb_fade_signal ───────────
+  fast-legs:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install numpy pandas requests redis zstandard scipy
+      - name: Download compact artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: compact-data
+          path: /tmp/
+      - name: Run 4 fast legs (b1m + l3m) with orb_fade_signal
         working-directory: ${{ env.BACKTEST_DIR }}
         env:
           BT_IS_DIR: is_bn
@@ -59,6 +83,7 @@ jobs:
           BT_REF_FEED: binance
           PM_BOOK_DIR: ${{ env.BTC_RAW_DIR }}
         run: |
+          ls /tmp/btc5m_compact/*.pkl.gz > /tmp/is_files_btc_compact.txt
           run_leg() {
             local LEG=$1
             local REGISTRY=coin_full_registry_${LEG}.json
@@ -69,14 +94,15 @@ jobs:
             'b1m_liqpull40':{'tf_hint':'1m','or_sec':60,'filter':{'feat':'PM_liq_pull20','op':'<','thr':40}},
             'b1m_imbslope30':{'tf_hint':'1m','or_sec':60,'filter':{'feat':'PM_imb_slope20','op':'<','thr':30}},
             'b1m_chand40':{'tf_hint':'1m','or_sec':60,'filter':{'feat':'IND_chand22_1d','op':'>','thr':40}},
-            'l5m_mom30':{'tf_hint':'5m','or_sec':120,'filter':{'feat':'IND_mom30_1d','op':'<','thr':80}},
-            'l5m_liqpull60':{'tf_hint':'5m','or_sec':120,'filter':{'feat':'PM_liq_pull20','op':'<','thr':60}},
             'l3m_bbpct40':{'tf_hint':'3m','or_sec':180,'filter':{'feat':'IND_bbpct20_1d','op':'>','thr':40}},
           }
           b=BASES[LEG]
           with open('${REGISTRY}','w') as f:
-            json.dump({f'btc_{LEG}':{'module':'phase_2.daily_orb_v5','fn':'daily_orb_v5_signal',
-              'params':['spot_price','asset','rem_sec','yp','np_val','yes_ask','no_ask','tf_hint','market_id','max_reentries','or_window_seconds'],
+            json.dump({f'btc_{LEG}':{'module':'phase_2.orb_fade','fn':'orb_fade_signal',
+              'params':['leg_id','filter_cfg','spot_price','rem_sec','yp','np_val','yes_ask','no_ask',
+                        'tf_hint','market_id','or_window_seconds','max_reentries','max_entry_price',
+                        'now','or_high_pre','or_low_pre'],
+              'leg_id':LEG,'filter_cfg':b['filter'],
               'tf_hint':b['tf_hint'],'or_window_seconds':b['or_sec'],
               'max_reentries':5,'_max_reentries':5,
               'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
@@ -87,40 +113,146 @@ jobs:
             python3 apply_orb_fade_filters.py --leg $LEG 2>&1
             echo "=== Done $LEG ==="
           }
-
-          for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l5m_mom30 l5m_liqpull60 l3m_bbpct40; do
+          for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l3m_bbpct40; do
             run_leg $LEG &
           done
-
           FAIL=0
-          for pid in $(jobs -p); do
-            wait "$pid" || FAIL=1
-          done
-          if [ $FAIL -ne 0 ]; then
-            echo "ERROR: One or more backtest legs failed"
-            exit 1
-          fi
-          echo "=== ALL 6 LEGS COMPLETE ==="
+          for pid in $(jobs -p); do wait "$pid" || FAIL=1; done
+          if [ $FAIL -ne 0 ]; then echo "ERROR: fast legs failed"; exit 1; fi
+          echo "=== ALL FAST LEGS COMPLETE ==="
+      - name: Upload fast leg results
+        uses: actions/upload-artifact@v4
+        with:
+          name: fast-leg-results
+          path: backtest/results/is_bn/
+          retention-days: 1
 
-      - name: Combine 6 legs into shared-wallet stack
-        working-directory: ${{ env.BACKTEST_DIR }}
-        run: python3 combine_orb_fade_full_stack.py results/is_bn
-
-      - name: Run quant suite on all 6 legs
+  # ── Phase 3: Chunked l5m legs — orb_fade_signal ────────────────
+  l5m-chunk:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4]
+        leg: [l5m_mom30, l5m_liqpull60]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install numpy pandas requests redis zstandard scipy
+      - name: Download compact artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: compact-data
+          path: /tmp/
+      - name: Split files into chunk ${{ matrix.chunk }}
+        run: |
+          ls /tmp/btc5m_compact/*.pkl.gz > /tmp/all_files.txt
+          python3 backtest/split_files.py --files /tmp/all_files.txt --chunks 5 --overlap 100 --outdir /tmp/chunks
+          echo "Chunk ${{ matrix.chunk }}: $(wc -l < /tmp/chunks/chunk_${{ matrix.chunk }}.txt) files"
+      - name: Run ${{ matrix.leg }} chunk ${{ matrix.chunk }}
         working-directory: ${{ env.BACKTEST_DIR }}
         env:
           BT_IS_DIR: is_bn
-          BT_Q_DIR: quant_bn
-        run: python3 quant_suite.py --only btc_b1m_liqpull40,btc_b1m_imbslope30,btc_b1m_chand40,btc_l5m_mom30,btc_l5m_liqpull60,btc_l3m_bbpct40 --workers 8 --fill taker
+          BT_REF_BTC_1M_DIR: ${{ env.REF_BN_DIR }}
+          BT_REF_FEED: binance
+          PM_BOOK_DIR: ${{ env.BTC_RAW_DIR }}
+          LEG: ${{ matrix.leg }}
+          CHUNK: ${{ matrix.chunk }}
+        run: |
+          python3 -c "
+          import json
+          LEG='${LEG}'
+          BASES={
+            'l5m_mom30':{'tf_hint':'5m','or_sec':120,'filter':{'feat':'IND_mom30_1d','op':'<','thr':80}},
+            'l5m_liqpull60':{'tf_hint':'5m','or_sec':120,'filter':{'feat':'PM_liq_pull20','op':'<','thr':60}},
+          }
+          b=BASES[LEG]
+          REGISTRY=f'coin_full_registry_${LEG}.json'
+          with open(REGISTRY,'w') as f:
+            json.dump({f'btc_{LEG}':{'module':'phase_2.orb_fade','fn':'orb_fade_signal',
+              'params':['leg_id','filter_cfg','spot_price','rem_sec','yp','np_val','yes_ask','no_ask',
+                        'tf_hint','market_id','or_window_seconds','max_reentries','max_entry_price',
+                        'now','or_high_pre','or_low_pre'],
+              'leg_id':LEG,'filter_cfg':b['filter'],
+              'tf_hint':b['tf_hint'],'or_window_seconds':b['or_sec'],
+              'max_reentries':5,'_max_reentries':5,
+              'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
+          "
+          BT_EXTRA_STRATEGIES=coin_full_registry_${LEG}.json \
+            BT_ONLY_EXTRA_REGISTRY=1 \
+            python3 run_is.py --files /tmp/chunks/chunk_${CHUNK}.txt --workers 2 --compact --fill taker 2>&1
+          python3 apply_orb_fade_filters.py --leg $LEG 2>&1
+          echo "=== Done $LEG chunk $CHUNK ==="
+      - name: Upload chunk result
+        uses: actions/upload-artifact@v4
+        with:
+          name: l5m-${{ matrix.leg }}-chunk-${{ matrix.chunk }}
+          path: backtest/results/is_bn/
+          retention-days: 1
 
-      - name: Portfolio comparison (stack alone vs stack+DEMA)
+  # ── Phase 4: Combine l5m chunks + run quant suite + compare ────
+  combine-and-compare:
+    needs: [fast-legs, l5m-chunk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install numpy pandas requests redis zstandard scipy
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Combine l5m chunks
+        run: |
+          mkdir -p backtest/results/is_bn
+          # Copy fast leg results
+          cp artifacts/fast-leg-results/*.gz backtest/results/is_bn/ 2>/dev/null || true
+          # List what we have
+          echo "=== Fast leg files ==="
+          ls -la artifacts/fast-leg-results/ 2>/dev/null
+          echo "=== Chunk artifacts ==="
+          ls artifacts/ | grep l5m || echo "no l5m chunks found"
+          # Combine l5m chunks
+          for LEG in l5m_mom30 l5m_liqpull60; do
+            echo "=== Combining $LEG ==="
+            ls artifacts/ | grep "l5m-${LEG}" || echo "no chunks for $LEG"
+            python3 backtest/combine_chunks.py \
+              --leg $LEG \
+              --chunks-dir artifacts/ \
+              --outdir backtest/results/is_bn/ \
+              --chunks 5 2>&1 || echo "WARN: combine failed for $LEG"
+          done
+          echo "=== Final files ==="
+          ls -la backtest/results/is_bn/
+      - name: Run quant suite on all 6 legs
         working-directory: ${{ env.BACKTEST_DIR }}
         run: |
-          python3 compare_stack.py
-
-      - name: Upload artifacts
+          for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l5m_mom30 l5m_liqpull60 l3m_bbpct40; do
+            if [ -f "results/is_bn/btc_${LEG}.trades.jsonl.gz" ]; then
+              echo "=== Quant: $LEG ==="
+              python3 -c "
+          import sys; sys.path.insert(0,'src')
+          from quant_suite import run_quant
+          run_quant('results/is_bn/btc_${LEG}.trades.jsonl.gz', 'results/quant_bn/btc_${LEG}.quant.json', capital=200)
+          " 2>&1 || echo "WARN: quant failed for $LEG"
+            else
+              echo "=== SKIP $LEG (no trades file) ==="
+            fi
+          done
+      - name: Portfolio comparison
+        working-directory: ${{ env.BACKTEST_DIR }}
+        run: python3 compare_stack.py 2>&1
+      - name: Upload final results
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: orb-fade-stack-results
           path: |
