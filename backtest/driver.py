@@ -219,6 +219,10 @@ def _build_signal_kwargs(registry_entry, market, state, elapsed_sec=None,
         "config": registry_entry,
         "or_high_pre": or_pre[0] if or_pre else None,
         "or_low_pre": or_pre[1] if or_pre else None,
+        "leg_id": registry_entry.get("leg_id") or registry_entry.get("_orb_fade_leg", ""),
+        "filter_cfg": registry_entry.get("filter_cfg") or registry_entry.get("_filter", {}),
+        "now": None,
+        "config": registry_entry,
     }
     return {p: param_map.get(p) for p in params}
 
