@@ -76,6 +76,7 @@ jobs:
           b=BASES[LEG]
           with open('${REGISTRY}','w') as f:
             json.dump({f'btc_{LEG}':{'module':'phase_2.daily_orb_v5','fn':'daily_orb_v5_signal',
+              'params':['spot_price','asset','rem_sec','yp','np_val','yes_ask','no_ask','tf_hint','market_id','max_reentries'],
               'tf_hint':b['tf_hint'],'max_reentries':5,'_max_reentries':5,
               'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
           "
