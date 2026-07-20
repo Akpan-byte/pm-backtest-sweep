@@ -77,7 +77,9 @@ def seed_orb(mod, reg_entry: dict, d: date) -> None:
 
     Finalized (or_closed=True). Because the seeded high/low equal the window's
     true max/min, the signal's later in-window spot accumulation cannot change
-    them (low <= spot <= high), so the OR stays exactly the Binance range."""
+    them (low <= spot <= high), so the OR stays exactly the Binance range.
+
+    Also stores the OR in _PRE_SEEDED_OR for passing to orb_fade_signal."""
     asset = (reg_entry.get("asset") or "BTC").upper()
     tf_mode = (reg_entry.get("tf_hint") or "any").lower()
     max_re = reg_entry.get("_max_reentries") or reg_entry.get("max_reentries", 3)
@@ -88,7 +90,6 @@ def seed_orb(mod, reg_entry: dict, d: date) -> None:
         or_sec = _TF_PARAMS[tf]
         rng = bt_reference.opening_range(asset, d, or_sec)
         if rng is None:
-            # Data gap: leave unfinalized; signal will just not trade this tf.
             state["or_high"][tf] = float("-inf")
             state["or_low"][tf] = float("inf")
             state["or_closed"][tf] = False
@@ -97,7 +98,15 @@ def seed_orb(mod, reg_entry: dict, d: date) -> None:
         state["or_high"][tf] = hi
         state["or_low"][tf] = lo
         state["or_closed"][tf] = True
+        # Store pre-seeded OR for orb_fade_signal backtest mode
+        leg_id = reg_entry.get("_orb_fade_leg") or reg_entry.get("leg_id", "")
+        _PRE_SEEDED_OR[(leg_id, str(d), tf)] = (hi, lo)
     mod._STATE[key] = state
+
+
+# Pre-seeded OR storage for passing to orb_fade_signal in backtest mode.
+# Keyed by (leg_id, date_str, tf) -> (or_high, or_low)
+_PRE_SEEDED_OR: dict[tuple, tuple[float, float]] = {}
 
 
 def run_market_clocked(snaps: list[dict], reg_entry: dict, fn, mod, pf: Portfolio,
@@ -251,7 +260,14 @@ def run_market_clocked_arr(arr: dict, reg_entry: dict, fn, mod, pf: Portfolio,
         state = {"spot_price": spot_price, "spot_history": spot_history, "rem_sec": rem_sec,
                  "yp": yp, "np_val": np_val, "yes_ask": yes_ask, "yes_bid": yp,
                  "no_ask": no_ask, "no_bid": np_val}
-        kwargs = driver._build_signal_kwargs(reg_entry, market, state)
+        # Look up pre-seeded OR for orb_fade_signal backtest mode
+        or_pre = None
+        leg_id = reg_entry.get("_orb_fade_leg") or reg_entry.get("leg_id", "")
+        if leg_id:
+            market_date = str(t0.date())
+            tf = reg_entry.get("tf_hint", "5m")
+            or_pre = _PRE_SEEDED_OR.get((leg_id, market_date, tf))
+        kwargs = driver._build_signal_kwargs(reg_entry, market, state, or_pre=or_pre)
         sig = fn(**kwargs); n_signals += 1
         if sig and sig.get("triggered"):
             n_triggered += 1

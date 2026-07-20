@@ -147,7 +147,7 @@ def _compute_spread(yes_ask, yes_bid, no_ask, no_bid):
 
 def _build_signal_kwargs(registry_entry, market, state, elapsed_sec=None,
                          duration_sec=None, orderbook_up=None, orderbook_down=None,
-                         yp_history=None, np_history=None):
+                         yp_history=None, np_history=None, or_pre=None):
     params = list(registry_entry.get("params", []))
     spot_history = state["spot_history"]
     spot_price = state["spot_price"]
@@ -217,6 +217,8 @@ def _build_signal_kwargs(registry_entry, market, state, elapsed_sec=None,
         "np_history": np_history or [],
         "book_imbalance_val": imb,
         "config": registry_entry,
+        "or_high_pre": or_pre[0] if or_pre else None,
+        "or_low_pre": or_pre[1] if or_pre else None,
     }
     return {p: param_map.get(p) for p in params}
 

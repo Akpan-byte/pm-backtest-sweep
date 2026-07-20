@@ -66,18 +66,22 @@ jobs:
           import json
           LEG='${LEG}'
           BASES={
-            'b1m_liqpull40':{'tf_hint':'1m','filter':{'feat':'PM_liq_pull20','op':'<','thr':40}},
-            'b1m_imbslope30':{'tf_hint':'1m','filter':{'feat':'PM_imb_slope20','op':'<','thr':30}},
-            'b1m_chand40':{'tf_hint':'1m','filter':{'feat':'IND_chand22_1d','op':'>','thr':40}},
-            'l5m_mom30':{'tf_hint':'5m','filter':{'feat':'IND_mom30_1d','op':'<','thr':80}},
-            'l5m_liqpull60':{'tf_hint':'5m','filter':{'feat':'PM_liq_pull20','op':'<','thr':60}},
-            'l3m_bbpct40':{'tf_hint':'3m','filter':{'feat':'IND_bbpct20_1d','op':'>','thr':40}},
+            'b1m_liqpull40':{'tf_hint':'1m','or_sec':60,'filter':{'feat':'PM_liq_pull20','op':'<','thr':40}},
+            'b1m_imbslope30':{'tf_hint':'1m','or_sec':60,'filter':{'feat':'PM_imb_slope20','op':'<','thr':30}},
+            'b1m_chand40':{'tf_hint':'1m','or_sec':60,'filter':{'feat':'IND_chand22_1d','op':'>','thr':40}},
+            'l5m_mom30':{'tf_hint':'5m','or_sec':120,'filter':{'feat':'IND_mom30_1d','op':'<','thr':80}},
+            'l5m_liqpull60':{'tf_hint':'5m','or_sec':120,'filter':{'feat':'PM_liq_pull20','op':'<','thr':60}},
+            'l3m_bbpct40':{'tf_hint':'3m','or_sec':180,'filter':{'feat':'IND_bbpct20_1d','op':'>','thr':40}},
           }
           b=BASES[LEG]
           with open('${REGISTRY}','w') as f:
-            json.dump({f'btc_{LEG}':{'module':'phase_2.daily_orb_v5','fn':'daily_orb_v5_signal',
-              'params':['spot_price','asset','rem_sec','yp','np_val','yes_ask','no_ask','tf_hint','market_id','max_reentries'],
-              'tf_hint':b['tf_hint'],'max_reentries':5,'_max_reentries':5,
+            json.dump({f'btc_{LEG}':{'module':'phase_2.orb_fade','fn':'orb_fade_signal',
+              'params':['leg_id','filter_cfg','spot_price','rem_sec','yp','np_val','yes_ask','no_ask',
+                        'tf_hint','market_id','or_window_seconds','max_reentries','max_entry_price',
+                        'now','or_high_pre','or_low_pre'],
+              'leg_id':LEG,'filter_cfg':b['filter'],
+              'tf_hint':b['tf_hint'],'or_window_seconds':b['or_sec'],
+              'max_reentries':5,'_max_reentries':5,
               'allow_reentry':True,'asset':'BTC','_orb_fade_leg':LEG,'_filter':b['filter']}},f,indent=2)
           "
             BT_EXTRA_STRATEGIES=${REGISTRY} \

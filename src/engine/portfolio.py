@@ -564,6 +564,7 @@ class Portfolio:
         oracle_spot: float | None = None,
         indicators: dict[str, Any] | None = None,
         stop_loss_pct: float = 0.0,
+        trail_stop_pct: float = 0.0,
     ) -> list[Trade]:
         """Evaluate active trades and close any that hit EXIT_SNIPE_PRICE or expiry.
 
@@ -571,6 +572,9 @@ class Portfolio:
         is used for expiry resolution instead of the regular ``spot`` feed.
         ``stop_loss_pct``: if > 0, exit trades when unrealised loss exceeds this
         fraction of the entry price (e.g. 0.30 = 30% stop-loss).
+        ``trail_stop_pct``: if > 0, exit trades when price drops this fraction
+        from the best price seen since entry (only activates after position is
+        in profit).
         """
         closed: list[Trade] = []
         # Defensive: callers may pass None when Redis prices are missing. Treat
@@ -580,9 +584,24 @@ class Portfolio:
         rem_sec = float(rem_sec) if rem_sec is not None else 0.0
         resolve_spot = oracle_spot if oracle_spot is not None else spot
         for condition_id, trade in list(self.active_trades.items()):
+            current_price = yp if trade.direction == "YES" else np_val
+
+            # --- trailing stop check (only after position is profitable) ---
+            if trail_stop_pct > 0 and current_price > trade.entry_price:
+                # Update best price seen
+                if current_price > trade.trail_best:
+                    trade.trail_best = current_price
+                # Check if price dropped from best by trail_stop_pct
+                drop_from_best = (trade.trail_best - current_price) / trade.trail_best
+                if drop_from_best >= trail_stop_pct:
+                    exit_price = current_price
+                    reason = f"trail_stop_{drop_from_best:.1%}"
+                    self._close_trade(trade, exit_price, reason)
+                    closed.append(trade)
+                    continue
+
             # --- stop-loss check (universal, all strategies) ---
             if stop_loss_pct > 0:
-                current_price = yp if trade.direction == "YES" else np_val
                 loss_pct = (trade.entry_price - current_price) / trade.entry_price
                 if loss_pct >= stop_loss_pct:
                     exit_price = current_price

@@ -437,7 +437,7 @@ def run_market(snapshots: list[dict], reg_entry: dict, signal_fn) -> dict:
             elapsed_sec, duration_sec, up, dn,
         )
         stop_loss_pct = float(reg_entry.get("stop_loss_pct", 0.0))
-        for closed in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct):
+        for closed in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct, trail_stop_pct=float(reg_entry.get("trail_stop_pct", 0.0))):
             pass  # portfolio already updated cash/closed_trades
 
         # 2) signal + entry (single-strat: portfolio cash is the gate).
@@ -562,7 +562,7 @@ def run_market_maker(snapshots: list[dict], reg_entry: dict, signal_fn,
             elapsed_sec, duration_sec,
             _top_book_dict(yes_ask, yp), _top_book_dict(no_ask, np_val),
         )
-        for _ in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct):
+        for _ in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct, trail_stop_pct=float(reg_entry.get("trail_stop_pct", 0.0))):
             pass
         # 2) fill resting maker order if price came to our bid
         if resting is not None and market_id not in pf.active_trades:
@@ -696,7 +696,7 @@ def run_market_maker_arr(arr: dict, reg_entry: dict, signal_fn,
             elapsed_sec, duration_sec,
             _top_book_dict(yes_ask, yp), _top_book_dict(no_ask, np_val),
         )
-        for _tr in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct):
+        for _tr in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct, trail_stop_pct=float(reg_entry.get("trail_stop_pct", 0.0))):
             _tr.closed_at = sim_t
         # 2) fill resting maker order if price came to our bid
         if resting is not None and market_id not in pf.active_trades:
@@ -818,7 +818,7 @@ def run_market_instant_arr(arr: dict, reg_entry: dict, signal_fn,
             elapsed_sec, duration_sec,
             _top_book_dict(yes_ask, yp), _top_book_dict(no_ask, np_val),
         )
-        for _tr in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct):
+        for _tr in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct, trail_stop_pct=float(reg_entry.get("trail_stop_pct", 0.0))):
             _tr.closed_at = sim_t
         if market_id in pf.active_trades:
             continue
@@ -976,7 +976,7 @@ def run_market_taker_arr(arr: dict, reg_entry: dict, signal_fn,
             elapsed_sec, duration_sec,
             _top_book_dict(yes_ask, yp), _top_book_dict(no_ask, np_val),
         )
-        for _tr in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct):
+        for _tr in pf.check_exits(spot_price, yp, np_val, rem_sec, oracle_spot=spot_price, indicators=indicators, stop_loss_pct=stop_loss_pct, trail_stop_pct=float(reg_entry.get("trail_stop_pct", 0.0))):
             _tr.closed_at = sim_t
         # 2) signal. With a position open, non-scale strats can't add (check_entry
         #    would return None), so skip the compute exactly like the maker path.
