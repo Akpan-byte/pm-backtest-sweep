@@ -47,16 +47,19 @@ jobs:
           python3 build_index_coin_compact.py btc ${{ env.BTC_COMPACT_DIR }} is_index_compact.json.gz --workers 3
           ls ${{ env.BTC_COMPACT_DIR }}/*.pkl.gz > /tmp/is_files_btc_compact.txt
           echo "compact: $(wc -l < /tmp/is_files_btc_compact.txt)"
+      - name: Package compact data as tarball
+        run: |
+          cd /tmp && tar czf compact-data.tar.gz btc5m_compact/ is_files_btc_compact.txt
+          cp backtest/dema_trades.csv /tmp/dema_trades.csv
+          ls -lh /tmp/compact-data.tar.gz
       - name: Upload compact artifacts
         uses: actions/upload-artifact@v4
         with:
           name: compact-data
           path: |
-            /tmp/btc5m_compact/
-            /tmp/is_files_btc_compact.txt
-            backtest/dema_trades.csv
+            /tmp/compact-data.tar.gz
+            /tmp/dema_trades.csv
           retention-days: 1
-          compression-level: 0
 
   # ── Phase 2: Fast legs (b1m + l3m) — orb_fade_signal ───────────
   fast-legs:
@@ -74,7 +77,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: compact-data
-          path: /tmp/
+          path: /tmp/download
+      - name: Extract compact data
+        run: |
+          ls -la /tmp/download/
+          cd /tmp && tar xzf /tmp/download/compact-data.tar.gz
+          cp /tmp/download/dema_trades.csv backtest/dema_trades.csv 2>/dev/null || true
+          echo "Files: $(ls /tmp/btc5m_compact/*.pkl.gz | wc -l)"
       - name: Run 4 fast legs (b1m + l3m) with orb_fade_signal
         working-directory: ${{ env.BACKTEST_DIR }}
         env:
@@ -148,7 +157,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: compact-data
-          path: /tmp/
+          path: /tmp/download
+      - name: Extract compact data
+        run: |
+          cd /tmp && tar xzf /tmp/download/compact-data.tar.gz
+          echo "Files: $(ls /tmp/btc5m_compact/*.pkl.gz | wc -l)"
       - name: Split files into chunk ${{ matrix.chunk }}
         run: |
           ls /tmp/btc5m_compact/*.pkl.gz > /tmp/all_files.txt
