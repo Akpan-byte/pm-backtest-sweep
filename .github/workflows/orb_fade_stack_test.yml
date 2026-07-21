@@ -52,46 +52,9 @@ jobs:
           cd /tmp && tar czf compact-data.tar.gz btc5m_compact/ is_files_btc_compact.txt
           ls -lh /tmp/compact-data.tar.gz
       - name: Download Binance klines cache (daily + 8h)
+        working-directory: ${{ env.BACKTEST_DIR }}
         run: |
-          python3 -c "
-          import json, urllib.request, os
-          cache_dir = '/tmp/klines_cache'
-          os.makedirs(cache_dir, exist_ok=True)
-          # Daily klines (70 bars)
-          try:
-              url = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=70'
-              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-              data = json.loads(urllib.request.urlopen(req, timeout=15).read())
-              with open(f'{cache_dir}/daily_klines.json', 'w') as f:
-                  json.dump(data, f)
-              print(f'daily: {len(data)} bars')
-          except Exception as e:
-              print(f'daily failed: {e}')
-              # Try Coinbase fallback
-              try:
-                  url = 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400'
-                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                  raw = json.loads(urllib.request.urlopen(req, timeout=15).read())
-                  # Convert to Binance format: [open_ms, open, high, low, close, volume]
-                  bars = [[int(c[0])*1000, float(c[3]), float(c[2]), float(c[1]), float(c[4]), float(c[5])] for c in raw]
-                  bars.sort(key=lambda b: b[0])
-                  with open(f'{cache_dir}/daily_klines.json', 'w') as f:
-                      json.dump(bars, f)
-                  print(f'daily (coinbase): {len(bars)} bars')
-              except Exception as e2:
-                  print(f'coinbase daily also failed: {e2}')
-          # 8h klines (90 bars)
-          try:
-              url = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=8h&limit=90'
-              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-              data = json.loads(urllib.request.urlopen(req, timeout=15).read())
-              with open(f'{cache_dir}/8h_klines.json', 'w') as f:
-                  json.dump(data, f)
-              print(f'8h: {len(data)} bars')
-          except Exception as e:
-              print(f'8h failed: {e}')
-          "
-          ls -la /tmp/klines_cache/
+          python3 aggregate_klines.py --ref-dir ${{ env.REF_BN_DIR }} --outdir /tmp/klines_cache --max-files 200
       - name: Upload compact artifacts
         uses: actions/upload-artifact@v4
         with:
