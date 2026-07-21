@@ -120,7 +120,6 @@ jobs:
             BT_EXTRA_STRATEGIES=${REGISTRY} \
               BT_ONLY_EXTRA_REGISTRY=1 \
               python3 run_is.py --files /tmp/is_files_btc_compact.txt --workers 2 --compact --fill taker 2>&1
-            python3 apply_orb_fade_filters.py --leg $LEG 2>&1
             echo "=== Done $LEG ==="
           }
           for LEG in b1m_liqpull40 b1m_imbslope30 b1m_chand40 l3m_bbpct40; do
@@ -200,7 +199,6 @@ jobs:
           BT_EXTRA_STRATEGIES=coin_full_registry_${LEG}.json \
             BT_ONLY_EXTRA_REGISTRY=1 \
             python3 run_is.py --files /tmp/chunks/chunk_${CHUNK}.txt --workers 2 --compact --fill taker 2>&1
-          python3 apply_orb_fade_filters.py --leg $LEG 2>&1
           echo "=== Done $LEG chunk $CHUNK ==="
       - name: Upload chunk result
         uses: actions/upload-artifact@v4
