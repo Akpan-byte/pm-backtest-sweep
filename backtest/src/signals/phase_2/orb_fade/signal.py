@@ -233,6 +233,23 @@ def _fetch_daily_klines(limit=70):
     today_open_ms = int(
         datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000
     )
+    # --- Local cache (GHA pre-download to bypass geo-blocks) ---
+    cache_path = os.environ.get("BINANCE_DAILY_CACHE", "")
+    if cache_path and os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r") as f:
+                raw = json.load(f)
+            bars = []
+            for k in raw:
+                ot = int(k[0])
+                if ot >= today_open_ms:
+                    continue
+                bars.append({"open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
+                             "close": float(k[4]), "open_ms": ot})
+            if len(bars) >= 25:
+                return bars, "cache"
+        except Exception as exc:
+            log.warning("cached daily klines failed: %s", exc)
     # --- Binance ---
     try:
         url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=%d" % limit
@@ -641,6 +658,18 @@ def _fetch_8h_klines(limit=90):
     (the backtest's reference series). The forming bar is kept; the publish-time
     lookup only ever selects CLOSED bars (close <= now). Empty list on failure ->
     the gate stays dormant (no flips), a safe degradation."""
+    # --- Local cache (GHA pre-download to bypass geo-blocks) ---
+    cache_path = os.environ.get("BINANCE_8H_CACHE", "")
+    if cache_path and os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r") as f:
+                raw = json.load(f)
+            bars = [{"open_ms": int(k[0]), "high": float(k[2]), "low": float(k[3]),
+                     "close": float(k[4]), "volume": float(k[5])} for k in raw]
+            bars.sort(key=lambda b: b["open_ms"])
+            return bars
+        except Exception as exc:
+            log.warning("cached 8h klines failed: %s", exc)
     try:
         url = ("https://api.binance.com/api/v3/klines?symbol=BTCUSDT"
                "&interval=8h&limit=%d" % limit)

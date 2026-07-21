@@ -51,11 +51,58 @@ jobs:
         run: |
           cd /tmp && tar czf compact-data.tar.gz btc5m_compact/ is_files_btc_compact.txt
           ls -lh /tmp/compact-data.tar.gz
+      - name: Download Binance klines cache (daily + 8h)
+        run: |
+          python3 -c "
+          import json, urllib.request, os
+          cache_dir = '/tmp/klines_cache'
+          os.makedirs(cache_dir, exist_ok=True)
+          # Daily klines (70 bars)
+          try:
+              url = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=70'
+              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+              data = json.loads(urllib.request.urlopen(req, timeout=15).read())
+              with open(f'{cache_dir}/daily_klines.json', 'w') as f:
+                  json.dump(data, f)
+              print(f'daily: {len(data)} bars')
+          except Exception as e:
+              print(f'daily failed: {e}')
+              # Try Coinbase fallback
+              try:
+                  url = 'https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=86400'
+                  req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                  raw = json.loads(urllib.request.urlopen(req, timeout=15).read())
+                  # Convert to Binance format: [open_ms, open, high, low, close, volume]
+                  bars = [[int(c[0])*1000, float(c[3]), float(c[2]), float(c[1]), float(c[4]), float(c[5])] for c in raw]
+                  bars.sort(key=lambda b: b[0])
+                  with open(f'{cache_dir}/daily_klines.json', 'w') as f:
+                      json.dump(bars, f)
+                  print(f'daily (coinbase): {len(bars)} bars')
+              except Exception as e2:
+                  print(f'coinbase daily also failed: {e2}')
+          # 8h klines (90 bars)
+          try:
+              url = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=8h&limit=90'
+              req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+              data = json.loads(urllib.request.urlopen(req, timeout=15).read())
+              with open(f'{cache_dir}/8h_klines.json', 'w') as f:
+                  json.dump(data, f)
+              print(f'8h: {len(data)} bars')
+          except Exception as e:
+              print(f'8h failed: {e}')
+          "
+          ls -la /tmp/klines_cache/
       - name: Upload compact artifacts
         uses: actions/upload-artifact@v4
         with:
           name: compact-data
           path: /tmp/compact-data.tar.gz
+          retention-days: 1
+      - name: Upload klines cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: klines-cache
+          path: /tmp/klines_cache/
           retention-days: 1
       - name: Upload DEMA trades
         uses: actions/upload-artifact@v4
@@ -81,6 +128,11 @@ jobs:
         with:
           name: compact-data
           path: /tmp/download
+      - name: Download klines cache
+        uses: actions/download-artifact@v4
+        with:
+          name: klines-cache
+          path: /tmp/klines_cache
       - name: Extract compact data
         run: |
           cd /tmp && tar xzf /tmp/download/compact-data.tar.gz
@@ -92,6 +144,8 @@ jobs:
           BT_REF_BTC_1M_DIR: ${{ env.REF_BN_DIR }}
           BT_REF_FEED: binance
           PM_BOOK_DIR: ${{ env.BTC_RAW_DIR }}
+          BINANCE_DAILY_CACHE: /tmp/klines_cache/daily_klines.json
+          BINANCE_8H_CACHE: /tmp/klines_cache/8h_klines.json
         run: |
           ls /tmp/btc5m_compact/*.pkl.gz > /tmp/is_files_btc_compact.txt
           run_leg() {
@@ -158,6 +212,11 @@ jobs:
         with:
           name: compact-data
           path: /tmp/download
+      - name: Download klines cache
+        uses: actions/download-artifact@v4
+        with:
+          name: klines-cache
+          path: /tmp/klines_cache
       - name: Extract compact data
         run: |
           cd /tmp && tar xzf /tmp/download/compact-data.tar.gz
@@ -174,6 +233,8 @@ jobs:
           BT_REF_BTC_1M_DIR: ${{ env.REF_BN_DIR }}
           BT_REF_FEED: binance
           PM_BOOK_DIR: ${{ env.BTC_RAW_DIR }}
+          BINANCE_DAILY_CACHE: /tmp/klines_cache/daily_klines.json
+          BINANCE_8H_CACHE: /tmp/klines_cache/8h_klines.json
           LEG: ${{ matrix.leg }}
           CHUNK: ${{ matrix.chunk }}
         run: |
