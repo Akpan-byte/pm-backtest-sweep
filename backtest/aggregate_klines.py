@@ -14,12 +14,47 @@ from pathlib import Path
 
 
 def load_1m_bars(ref_dir: str, max_files: int = 100) -> list[dict]:
-    """Load 1m bars from zipped CSVs. Returns list of {open_ms, open, high, low, close, volume}."""
+    """Load 1m bars from zipped CSVs or raw CSVs. Returns list of {open_ms, open, high, low, close, volume}."""
+    import zipfile
     bars = []
     ref_path = Path(ref_dir)
+
+    # Try .csv.gz files first
     csv_files = sorted(ref_path.glob("*.csv.gz"))[:max_files]
     if not csv_files:
+        # Try .csv files
         csv_files = sorted(ref_path.glob("*.csv"))[:max_files]
+    if not csv_files:
+        # Try .zip files containing CSVs
+        zip_files = sorted(ref_path.glob("*.zip"))[:max_files]
+        for zf in zip_files:
+            try:
+                with zipfile.ZipFile(zf) as z:
+                    for name in z.namelist():
+                        if name.endswith('.csv'):
+                            with z.open(name) as f:
+                                reader = csv.reader(f.read().decode('utf-8').splitlines())
+                                header = next(reader, None)
+                                for row in reader:
+                                    if len(row) < 6:
+                                        continue
+                                    try:
+                                        open_ms = int(row[0])
+                                        o = float(row[1])
+                                        h = float(row[2])
+                                        l = float(row[3])
+                                        c = float(row[4])
+                                        v = float(row[5])
+                                        bars.append({"open_ms": open_ms, "open": o, "high": h,
+                                                     "low": l, "close": c, "volume": v})
+                                    except (ValueError, IndexError):
+                                        continue
+            except Exception:
+                continue
+        if bars:
+            bars.sort(key=lambda b: b["open_ms"])
+            return bars
+
     for f in csv_files:
         opener = gzip.open if f.suffix == ".gz" else open
         mode = "rt" if f.suffix == ".gz" else "r"
