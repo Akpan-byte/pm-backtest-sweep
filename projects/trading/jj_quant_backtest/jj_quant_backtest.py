@@ -57,9 +57,10 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Data: local absolute path or relative to project root (CI)
-LOCAL_DATA = Path("/config/fvg_execution_engine/backtests/data/gdrive_raw")
+# The canonical 1-min futures data lives under fvg_execution_engine/backtests/data/<symbol>/M1.csv.gz
+LOCAL_DATA = Path("/config/fvg_execution_engine/backtests/data")
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
-CI_DATA = REPO_ROOT / "fvg_execution_engine" / "backtests" / "data" / "gdrive_raw"
+CI_DATA = REPO_ROOT / "fvg_execution_engine" / "backtests" / "data"
 DATA_DIR = LOCAL_DATA if LOCAL_DATA.exists() else CI_DATA
 
 # Quant suite import — local copy bundled with project
@@ -104,15 +105,19 @@ FEE_MODELS = [
     (0.00010, "hl_maker_1bps"),
     (0.00035, "hl_taker_3.5bps"),
 ]
+# Prop-firm account sizes.  The starting balance must be large enough that the
+# minimum 1-contract position does not blow up the R-multiple calculation used
+# by the quant suite.  With $50k and 0.5% risk, the target risk is $250/contract
+# for NQ ($50 risk per contract at 25 pt SL), giving sensible 5-contract sizing.
 PROFILES = {
-    "50k": {"sl_pts": 25.0, "tp_pts": 38.0, "label": "50k"},
-    "150k": {"sl_pts": 50.0, "tp_pts": 75.0, "label": "150k"},
+    "50k": {"sl_pts": 25.0, "tp_pts": 38.0, "starting_balance": 50_000.0, "label": "50k"},
+    "150k": {"sl_pts": 50.0, "tp_pts": 75.0, "starting_balance": 150_000.0, "label": "150k"},
 }
 
 INSTRUMENTS = {
-    "NQ": {"csv": "NQ_1min.csv.gz", "point_value": 2.0, "tick_size": 0.25},
-    "ES": {"csv": "ES_1min.csv.gz", "point_value": 1.0, "tick_size": 0.25},
-    "YM": {"csv": "YM_1min.csv.gz", "point_value": 5.0, "tick_size": 1.0},
+    "NQ": {"csv": "NQ/M1.csv.gz", "point_value": 2.0, "tick_size": 0.25},
+    "ES": {"csv": "ES/M1.csv.gz", "point_value": 1.0, "tick_size": 0.25},
+    "YM": {"csv": "YM/M1.csv.gz", "point_value": 5.0, "tick_size": 1.0},
 }
 
 # Session timing (minute-of-day, US Eastern)
@@ -151,18 +156,28 @@ def load_instrument_data(symbol: str) -> pd.DataFrame:
     t0 = time.time()
 
     try:
-        if csv_path.suffix == ".gz":
-            df = pd.read_csv(csv_path, parse_dates=["timestamp"])
-        else:
-            df = pd.read_csv(csv_path, parse_dates=["timestamp"])
+        # The canonical 1-min files use 'ts' as the timestamp column and may be
+        # timezone-aware (e.g. '2016-05-31 20:00:00-0400').  Older gdrive_raw files
+        # used 'timestamp'.  Detect and normalize both.
+        df = pd.read_csv(csv_path)
     except Exception as e:
         logger.error("Failed to load CSV %s: %s", csv_path, e)
         raise
 
+    # Normalize column name
+    if "ts" in df.columns and "timestamp" not in df.columns:
+        df = df.rename(columns={"ts": "timestamp"})
+
+    if "timestamp" not in df.columns:
+        raise ValueError(f"CSV {csv_path} has no recognizable timestamp column (found: {list(df.columns)})")
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    # Convert to US Eastern so session timing (08:29, 09:29, etc.) is correct
+    df["timestamp"] = df["timestamp"].dt.tz_convert("America/New_York")
+
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     # Pre-compute minute-of-day and date (US Eastern)
-    # Assume data is already in ET or UTC — we treat it as-is
     df["minute_of_day"] = df["timestamp"].dt.hour * 60 + df["timestamp"].dt.minute
     df["date"] = df["timestamp"].dt.date
     df["hour"] = df["timestamp"].dt.hour
@@ -193,6 +208,7 @@ class JJConfig:
     profile: str
     sl_pts: float
     tp_pts: float
+    starting_balance: float
     bos_lookback: int
     mean_reversion_distance: float
     news_spike_threshold: float
@@ -231,6 +247,7 @@ def generate_all_configs(instrument: str) -> list[JJConfig]:
                                     profile=profile_name,
                                     sl_pts=profile_vals["sl_pts"],
                                     tp_pts=profile_vals["tp_pts"],
+                                    starting_balance=profile_vals["starting_balance"],
                                     bos_lookback=bos_lb,
                                     mean_reversion_distance=mrd,
                                     news_spike_threshold=nst,
@@ -261,7 +278,7 @@ def run_jj_simon_backtest(
     n = len(df)
     if n < 100:
         logger.warning("Insufficient bars (%d) for backtest", n)
-        return [], STARTING_BALANCE, 0.0
+        return [], config.starting_balance, 0.0
 
     # Extract arrays for speed
     opens = df["open"].values.astype(np.float64)
@@ -276,7 +293,7 @@ def run_jj_simon_backtest(
     timestamps = df["timestamp"].values
 
     # State
-    balance = STARTING_BALANCE
+    balance = config.starting_balance
     total_fees = 0.0
     trades = []
 
@@ -1046,7 +1063,7 @@ def run_chunk(
             trades, balance, total_fees = run_jj_simon_backtest(df, config)
 
             quant = compute_quant_suite(
-                trades, balance, STARTING_BALANCE, total_fees, years, seed=42 + idx
+                trades, balance, config.starting_balance, total_fees, years, seed=42 + idx
             )
 
             result = {
@@ -1055,6 +1072,7 @@ def run_chunk(
                 "profile": config.profile,
                 "sl_pts": config.sl_pts,
                 "tp_pts": config.tp_pts,
+                "starting_balance": config.starting_balance,
                 "bos_lookback": config.bos_lookback,
                 "mean_reversion_distance": config.mean_reversion_distance,
                 "news_spike_threshold": config.news_spike_threshold,

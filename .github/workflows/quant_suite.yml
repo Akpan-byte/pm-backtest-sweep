@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'projects/trading/jj_quant_backtest/**'
-      - 'fvg_execution_engine/backtests/data/**'
+      - '.github/workflows/quant_suite.yml'
   workflow_dispatch:
     inputs:
       total_chunks:
@@ -17,32 +17,7 @@ env:
   TOTAL_CHUNKS: ${{ github.event.inputs.total_chunks || '20' }}
 
 jobs:
-  prepare-data:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            fvg_execution_engine/backtests/data/gdrive_raw/NQ_1min.csv.gz
-            fvg_execution_engine/backtests/data/gdrive_raw/ES_1min.csv.gz
-            fvg_execution_engine/backtests/data/gdrive_raw/YM_1min.csv.gz
-          sparse-checkout-cone-mode: false
-
-      - name: Verify data files exist
-        run: |
-          ls -lh fvg_execution_engine/backtests/data/gdrive_raw/{NQ,ES,YM}_1min.csv.gz
-          echo "Data files ready"
-
-      - name: Upload data artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: futures-1min-data
-          path: fvg_execution_engine/backtests/data/gdrive_raw/{NQ,ES,YM}_1min.csv.gz
-          retention-days: 1
-          compression-level: 0
-
   backtest:
-    needs: prepare-data
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -51,7 +26,24 @@ jobs:
         chunk_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - name: Checkout fvg-backtest-engine data repo
+        uses: actions/checkout@v4
+        with:
+          repository: Akpan-byte/fvg-backtest-engine
+          path: fvg_execution_engine
+          sparse-checkout: |
+            backtests/data/NQ/M1.csv.gz
+            backtests/data/ES/M1.csv.gz
+            backtests/data/YM/M1.csv.gz
+          sparse-checkout-cone-mode: false
+
+      - name: Verify data files exist
+        run: |
+          ls -lh fvg_execution_engine/backtests/data/{NQ,ES,YM}/M1.csv.gz
+          echo "Data files ready"
 
       - uses: actions/setup-python@v5
         with:
@@ -60,18 +52,9 @@ jobs:
       - name: Install dependencies
         run: pip install numpy pandas
 
-      - name: Download data
-        uses: actions/download-artifact@v4
-        with:
-          name: futures-1min-data
-          path: fvg_execution_engine/backtests/data/gdrive_raw/
-
-      - name: Verify data
-        run: ls -lh fvg_execution_engine/backtests/data/gdrive_raw/
-
       - name: Run backtest chunk
         run: |
-          cd jj_quant_backtest
+          cd projects/trading/jj_quant_backtest
           python jj_quant_backtest.py \
             --instrument ${{ matrix.instrument }} \
             --chunk_id ${{ matrix.chunk_id }} \
@@ -82,7 +65,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.instrument }}-chunk${{ matrix.chunk_id }}
-          path: jj_quant_backtest/results/*.json
+          path: projects/trading/jj_quant_backtest/results/*.json
           retention-days: 30
 
       - name: Upload logs
@@ -90,7 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.instrument }}-chunk${{ matrix.chunk_id }}-logs
-          path: jj_quant_backtest/logs/
+          path: projects/trading/jj_quant_backtest/logs/
           retention-days: 7
 
   aggregate:
@@ -115,12 +98,12 @@ jobs:
 
       - name: Aggregate results
         run: |
-          cd jj_quant_backtest
-          python aggregate_results.py --results_dir ../all_results/
+          cd projects/trading/jj_quant_backtest
+          python aggregate_results.py --results_dir ../../all_results/
 
       - name: Upload final report
         uses: actions/upload-artifact@v4
         with:
           name: jj-simon-quant-suite-final
-          path: jj_quant_backtest/results/final_report.*
+          path: projects/trading/jj_quant_backtest/results/final_report.*
           retention-days: 90

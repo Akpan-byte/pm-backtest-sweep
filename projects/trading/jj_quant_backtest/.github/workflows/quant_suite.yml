@@ -23,14 +23,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: |
-            fvg_execution_engine/backtests/data/gdrive_raw/NQ_1min.csv.gz
-            fvg_execution_engine/backtests/data/gdrive_raw/ES_1min.csv.gz
-            fvg_execution_engine/backtests/data/gdrive_raw/YM_1min.csv.gz
+            fvg_execution_engine/backtests/data/NQ/M1.csv.gz
+            fvg_execution_engine/backtests/data/ES/M1.csv.gz
+            fvg_execution_engine/backtests/data/YM/M1.csv.gz
           sparse-checkout-cone-mode: false
 
       - name: Verify data files exist
         run: |
-          ls -lh fvg_execution_engine/backtests/data/gdrive_raw/{NQ,ES,YM}_1min.csv.gz
+          ls -lh fvg_execution_engine/backtests/data/{NQ,ES,YM}/M1.csv.gz
           echo "Data files ready"
 
       - name: Upload data artifact
@@ -64,10 +64,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: futures-1min-data
-          path: fvg_execution_engine/backtests/data/gdrive_raw/
+          path: fvg_execution_engine/backtests/data/
 
       - name: Verify data
-        run: ls -lh fvg_execution_engine/backtests/data/gdrive_raw/
+        run: ls -lh fvg_execution_engine/backtests/data/{NQ,ES,YM}/M1.csv.gz
 
       - name: Run backtest chunk
         run: |

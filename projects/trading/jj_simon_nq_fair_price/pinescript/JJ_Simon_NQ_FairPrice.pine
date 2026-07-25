@@ -1,0 +1,229 @@
+//@version=5
+strategy("JJ Simon NQ Fair-Price Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.cash_per_contract, commission_value=2.5)
+
+// ============================================================================
+// Inputs
+// ============================================================================
+groupProfile = "Risk Profile"
+profile = input.string("50k", "Prop Profile", options=["50k", "150k"], group=groupProfile)
+slPts = profile == "50k" ? 25.0 : 50.0
+tpPts = profile == "50k" ? 38.0 : 75.0
+
+// Dynamic candle rule: if trigger candle body > this, switch to 50/75 and halve size
+dynamicTrigger = input.float(25.0, "Dynamic Candle Trigger (pts)", group=groupProfile)
+dynamicSl = input.float(50.0, "Dynamic SL (pts)", group=groupProfile)
+dynamicTp = input.float(75.0, "Dynamic TP (pts)", group=groupProfile)
+
+// State machine distances
+meanRevDistance = input.float(38.0, "Mean Reversion Distance (pts)", group="Entry Filters")
+newsSpikeThreshold = input.float(60.0, "Unexpected News Spike (pts)", group="Entry Filters")
+bosLookback = input.int(5, "BOS Lookback (candles)", minval=2, maxval=20, group="Entry Filters")
+enablePm = input.bool(true, "Enable PM Session (02:00-03:00)", group="Session")
+
+// Limits
+maxMorningTrades = input.int(3, "Max Morning Trades", group="Limits")
+maxConsecLosses = input.int(2, "Max Consecutive Losses", group="Limits")
+
+// ============================================================================
+// Time helpers (EST/EDT)
+// ============================================================================
+t = time(timeframe.period, "0930-1600")
+inSession = not na(t)
+minuteOfDay = hour * 60 + minute
+is829 = hour == 8 and minute == 29
+is929 = hour == 9 and minute == 29
+is1359 = hour == 13 and minute == 59
+
+isNewsWindow = minuteOfDay >= 510 and minuteOfDay < 540
+isOpenCont = minuteOfDay >= 570 and minuteOfDay < 580
+isMeanRev = minuteOfDay >= 580 and minuteOfDay < 660
+isPmCont = enablePm and minuteOfDay >= 840 and minuteOfDay < 850
+isPmRev = enablePm and minuteOfDay >= 850 and minuteOfDay < 900
+isAfternoon = isPmCont or isPmRev
+
+// ============================================================================
+// Fair-price anchors (body only)
+// ============================================================================
+var float newsAnchorHigh = na
+var float newsAnchorLow = na
+var float newsAnchorMid = na
+var float nyAnchorHigh = na
+var float nyAnchorLow = na
+var float nyAnchorMid = na
+var float pmAnchorHigh = na
+var float pmAnchorLow = na
+var float pmAnchorMid = na
+var float resetAnchorHigh = na
+var float resetAnchorLow = na
+var float resetAnchorMid = na
+
+// Set anchors at exact anchor candles
+if is829
+    newsAnchorHigh := max(open, close)
+    newsAnchorLow := min(open, close)
+    newsAnchorMid := (newsAnchorHigh + newsAnchorLow) / 2
+
+if is929
+    nyAnchorHigh := max(open, close)
+    nyAnchorLow := min(open, close)
+    nyAnchorMid := (nyAnchorHigh + nyAnchorLow) / 2
+
+if is1359
+    pmAnchorHigh := max(open, close)
+    pmAnchorLow := min(open, close)
+    pmAnchorMid := (pmAnchorHigh + pmAnchorLow) / 2
+
+// ============================================================================
+// Unexpected news reset
+// ============================================================================
+var bool newsPending = false
+var int newsCount = 0
+var float newsAvgHigh = na
+var float newsAvgLow = na
+
+candleRange = high - low
+isUnexpectedSpike = candleRange > newsSpikeThreshold and not isNewsWindow and not isOpenCont and not (minuteOfDay < 510)
+
+if isUnexpectedSpike and not newsPending
+    newsPending := true
+    newsCount := 0
+    newsAvgHigh := 0.0
+    newsAvgLow := 0.0
+
+if newsPending
+    newsCount += 1
+    newsAvgHigh := newsAvgHigh + high
+    newsAvgLow := newsAvgLow + low
+    if newsCount >= 3
+        resetAnchorHigh := newsAvgHigh / 3.0
+        resetAnchorLow := newsAvgLow / 3.0
+        resetAnchorMid := (resetAnchorHigh + resetAnchorLow) / 2.0
+        newsPending := false
+
+// Active anchor selection
+float anchorMid = na
+float anchorHigh = na
+float anchorLow = na
+if not na(resetAnchorMid)
+    anchorMid := resetAnchorMid
+    anchorHigh := resetAnchorHigh
+    anchorLow := resetAnchorLow
+else if isNewsWindow
+    anchorMid := newsAnchorMid
+    anchorHigh := newsAnchorHigh
+    anchorLow := newsAnchorLow
+else if isOpenCont or isMeanRev
+    anchorMid := nyAnchorMid
+    anchorHigh := nyAnchorHigh
+    anchorLow := nyAnchorLow
+else if isAfternoon
+    anchorMid := pmAnchorMid
+    anchorHigh := pmAnchorHigh
+    anchorLow := pmAnchorLow
+
+// ============================================================================
+// Structural triggers
+// ============================================================================
+body = math.abs(close - open)
+upperWick = high - math.max(open, close)
+lowerWick = math.min(open, close) - low
+prevBody = body[1]
+
+isDisplacement = body > prevBody and upperWick < body * 0.3 and lowerWick < body * 0.3
+dispBull = isDisplacement and close > open
+
+hh = ta.highest(high, bosLookback)
+ll = ta.lowest(low, bosLookback)
+isBos = close > hh[1] or close < ll[1]
+bosBull = close > hh[1]
+
+// ============================================================================
+// Daily counters
+// ============================================================================
+var int morningTrades = 0
+var int consecLosses = 0
+var bool newDay = false
+newDay := dayofmonth != dayofmonth[1]
+if newDay
+    morningTrades := 0
+    consecLosses := 0
+    resetAnchorHigh := na
+    resetAnchorLow := na
+    resetAnchorMid := na
+
+// ============================================================================
+// Entry logic
+// ============================================================================
+bool canTrade = morningTrades < maxMorningTrades and consecLosses < maxConsecutiveLosses and inSession
+float distance = not na(anchorMid) ? close - anchorMid : 0.0
+
+bool enterLong = false
+bool enterShort = false
+string signalName = na
+
+// News phase / mean reversion
+if (isNewsWindow or isMeanRev or isPmRev) and not na(anchorMid) and math.abs(distance) >= meanRevDistance and canTrade
+    if distance > 0
+        if isBos and not bosBull
+            enterShort := true
+            signalName := "MR short"
+        if isDisplacement and close < open
+            enterShort := true
+            signalName := "MR disp short"
+    if distance < 0
+        if isBos and bosBull
+            enterLong := true
+            signalName := "MR long"
+        if isDisplacement and close > open
+            enterLong := true
+            signalName := "MR disp long"
+
+// Opening / PM continuation
+if (isOpenCont or isPmCont) and canTrade
+    if isDisplacement
+        enterLong := close > open
+        enterShort := close < open
+        signalName := "Cont"
+    else if isBos
+        enterLong := bosBull
+        enterShort := not bosBull
+        signalName := "Cont BOS"
+
+// ============================================================================
+// Sizing & execution
+// ============================================================================
+bool dynamicCandle = body > dynamicTrigger
+float useSl = dynamicCandle ? math.max(slPts, dynamicSl) : slPts
+float useTp = dynamicCandle ? math.max(tpPts, dynamicTp) : tpPts
+
+if enterLong and strategy.position_size == 0
+    qty = dynamicCandle ? strategy.equity * 0.005 / (useSl * syminfo.pointvalue) / 2 : strategy.equity * 0.005 / (useSl * syminfo.pointvalue)
+    strategy.entry("Long", strategy.long, qty=math.max(1, qty))
+    strategy.exit("Long Exit", "Long", loss=useSl / syminfo.mintick, profit=useTp / syminfo.mintick)
+    morningTrades += 1
+
+if enterShort and strategy.position_size == 0
+    qty = dynamicCandle ? strategy.equity * 0.005 / (useSl * syminfo.pointvalue) / 2 : strategy.equity * 0.005 / (useSl * syminfo.pointvalue)
+    strategy.entry("Short", strategy.short, qty=math.max(1, qty))
+    strategy.exit("Short Exit", "Short", loss=useSl / syminfo.mintick, profit=useTp / syminfo.mintick)
+    morningTrades += 1
+
+// Track consecutive losses (approximate via position close)
+if strategy.closedtrades.exit_price(strategy.closedtrades - 1) < strategy.closedtrades.entry_price(strategy.closedtrades - 1) and strategy.position_size == 0
+    consecLosses += 1
+else if strategy.closedtrades > 0 and strategy.position_size == 0
+    consecLosses := 0
+
+// ============================================================================
+// Visualization
+// ============================================================================
+plotshape(isDisplacement, title="Displacement", location=location.belowbar, color=dispBull ? color.green : color.fuchsia, style=shape.triangleup, size=size.tiny)
+bgcolor(isNewsWindow ? color.new(color.orange, 90) : na, title="News Window")
+bgcolor(isOpenCont ? color.new(color.green, 90) : na, title="Open Continuation")
+bgcolor(isMeanRev ? color.new(color.blue, 90) : na, title="Mean Reversion")
+bgcolor(isAfternoon ? color.new(color.purple, 90) : na, title="PM Session")
+
+// Anchor zones
+plot(not na(anchorHigh) ? anchorHigh : na, "Anchor High", color=color.gray, style=plot.style_linebr)
+plot(not na(anchorLow) ? anchorLow : na, "Anchor Low", color=color.gray, style=plot.style_linebr)
+fill(plot(anchorHigh, "", color=color.gray), plot(anchorLow, "", color=color.gray), color=color.new(color.gray, 90), title="Anchor Zone")
