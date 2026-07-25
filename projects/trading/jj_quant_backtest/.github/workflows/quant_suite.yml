@@ -1,0 +1,121 @@
+name: JJ Simon Quant Suite — 10yr NQ/ES/YM
+
+on:
+  workflow_dispatch:
+    inputs:
+      total_chunks:
+        description: 'Number of parallel workers per instrument'
+        required: false
+        default: '20'
+
+env:
+  TOTAL_CHUNKS: ${{ github.event.inputs.total_chunks || '20' }}
+
+jobs:
+  prepare-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            fvg_execution_engine/backtests/data/gdrive_raw/NQ_1min.csv.gz
+            fvg_execution_engine/backtests/data/gdrive_raw/ES_1min.csv.gz
+            fvg_execution_engine/backtests/data/gdrive_raw/YM_1min.csv.gz
+          sparse-checkout-cone-mode: false
+
+      - name: Verify data files exist
+        run: |
+          ls -lh fvg_execution_engine/backtests/data/gdrive_raw/{NQ,ES,YM}_1min.csv.gz
+          echo "Data files ready"
+
+      - name: Upload data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: futures-1min-data
+          path: fvg_execution_engine/backtests/data/gdrive_raw/{NQ,ES,YM}_1min.csv.gz
+          retention-days: 1
+          compression-level: 0
+
+  backtest:
+    needs: prepare-data
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        instrument: [NQ, ES, YM]
+        chunk_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Download data
+        uses: actions/download-artifact@v4
+        with:
+          name: futures-1min-data
+          path: fvg_execution_engine/backtests/data/gdrive_raw/
+
+      - name: Verify data
+        run: ls -lh fvg_execution_engine/backtests/data/gdrive_raw/
+
+      - name: Run backtest chunk
+        run: |
+          cd jj_quant_backtest
+          python jj_quant_backtest.py \
+            --instrument ${{ matrix.instrument }} \
+            --chunk_id ${{ matrix.chunk_id }} \
+            --total_chunks ${{ env.TOTAL_CHUNKS }}
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.instrument }}-chunk${{ matrix.chunk_id }}
+          path: jj_quant_backtest/results/*.json
+          retention-days: 30
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.instrument }}-chunk${{ matrix.chunk_id }}-logs
+          path: jj_quant_backtest/logs/
+          retention-days: 7
+
+  aggregate:
+    needs: backtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install numpy pandas
+
+      - name: Download all result artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all_results/
+          pattern: "*-chunk*"
+          merge-multiple: true
+
+      - name: Aggregate results
+        run: |
+          cd jj_quant_backtest
+          python aggregate_results.py --results_dir ../all_results/
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jj-simon-quant-suite-final
+          path: jj_quant_backtest/results/final_report.*
+          retention-days: 90
