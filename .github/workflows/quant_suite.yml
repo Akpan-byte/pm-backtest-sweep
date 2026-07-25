@@ -8,21 +8,40 @@ on:
       - '.github/workflows/quant_suite.yml'
   workflow_dispatch:
     inputs:
+      instrument:
+        description: 'Instrument(s) to run (NQ, ES, YM, or ALL)'
+        required: false
+        default: 'ALL'
       total_chunks:
         description: 'Number of parallel workers per instrument'
         required: false
         default: '20'
 
 env:
+  INSTRUMENT: ${{ github.event.inputs.instrument || 'ALL' }}
   TOTAL_CHUNKS: ${{ github.event.inputs.total_chunks || '20' }}
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      instruments: ${{ steps.set-matrix.outputs.instruments }}
+    steps:
+      - id: set-matrix
+        run: |
+          if [ "${{ env.INSTRUMENT }}" = "ALL" ]; then
+            echo 'instruments=["NQ","ES","YM"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'instruments=["${{ env.INSTRUMENT }}"]' >> "$GITHUB_OUTPUT"
+          fi
+
   backtest:
+    needs: setup
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        instrument: [NQ, ES, YM]
+        instrument: ${{ fromJson(needs.setup.outputs.instruments) }}
         chunk_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
