@@ -80,7 +80,7 @@ jobs:
         run: |
           cd ${{ env.PROJECT_DIR }}
           python3 scripts/run_chunk.py \
-            --input ../../market_data/NQ_1min.csv \
+            --input ../../../market_data/NQ_1min.csv \
             --start-date $(python3 -c "import datetime; base=datetime.date(2016,6,1); print(base + datetime.timedelta(days=${{ matrix.chunk_id }}*182))") \
             --end-date $(python3 -c "import datetime; base=datetime.date(2016,6,1); print(min(base + datetime.timedelta(days=(${{ matrix.chunk_id }}+1)*182 - 1), datetime.date(2026,5,29)))") \
             --output results/chunk_${{ matrix.chunk_id }}.json \
@@ -119,7 +119,7 @@ jobs:
         run: |
           cd ${{ env.PROJECT_DIR }}
           python3 scripts/aggregate.py \
-            --glob "../../all_chunks/*.json" \
+            --glob "../../../all_chunks/*.json" \
             --output results/final_report.json
 
       - name: Upload final report

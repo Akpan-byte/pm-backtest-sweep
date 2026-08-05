@@ -111,7 +111,7 @@ jobs:
         run: |
           cd projects/trading/v5_orb_nq_backtest
           python3 scripts/run_local.py \
-            --input ../../market_data/${{ matrix.data_file }} \
+            --input ../../../market_data/${{ matrix.data_file }} \
             --output results/${{ matrix.symbol }}_${{ matrix.max_entries }}_final_report.json \
             --max-entries ${{ matrix.max_entries }} \
             --max-contracts 5 \
