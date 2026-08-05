@@ -1,0 +1,143 @@
+# CHANGE_SUMMARY
+# 2026-08-05  opencode
+#   - Created root-level workflow to run the v5 ORB NQ backtest in the
+#     projects/trading/v5_orb_nq_backtest/ subdirectory.
+# WHY: GitHub Actions only detects workflows under the repo root .github/workflows/.
+
+name: v5 ORB NQ 10-Year Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_entries:
+        description: 'Max entries per timeframe'
+        required: false
+        default: '2'
+      max_contracts:
+        description: 'Global max contracts'
+        required: false
+        default: '5'
+
+env:
+  MAX_ENTRIES: ${{ github.event.inputs.max_entries || '2' }}
+  MAX_CONTRACTS: ${{ github.event.inputs.max_contracts || '5' }}
+  PROJECT_DIR: projects/trading/v5_orb_nq_backtest
+
+jobs:
+  prepare-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+
+      - name: Configure rclone
+        env:
+          RCLONE_CONFIG_AKPANBRAIN_TYPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TYPE }}
+          RCLONE_CONFIG_AKPANBRAIN_PROVIDER: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_PROVIDER }}
+          RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_AKPANBRAIN_ENDPOINT: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ENDPOINT }}
+          RCLONE_CONFIG_AKPANBRAIN_REGION: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_REGION }}
+        run: |
+          mkdir -p ~/.config/rclone
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [akpanbrain]
+          type = ${RCLONE_CONFIG_AKPANBRAIN_TYPE}
+          provider = ${RCLONE_CONFIG_AKPANBRAIN_PROVIDER}
+          access_key_id = ${RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID}
+          secret_access_key = ${RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY}
+          endpoint = ${RCLONE_CONFIG_AKPANBRAIN_ENDPOINT}
+          region = ${RCLONE_CONFIG_AKPANBRAIN_REGION}
+          EOF
+
+      - name: Download NQ data
+        run: |
+          mkdir -p market_data
+          rclone copy akpanbrain:data/market_data/NQ_1min.csv market_data/
+          ls -lh market_data/NQ_1min.csv
+
+      - name: Upload data artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nq-1min-data
+          path: market_data/NQ_1min.csv
+          retention-days: 1
+          compression-level: 0
+
+  backtest:
+    needs: prepare-data
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk_id: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Download data
+        uses: actions/download-artifact@v4
+        with:
+          name: nq-1min-data
+          path: market_data/
+
+      - name: Run backtest chunk
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          python3 scripts/run_chunk.py \
+            --input ../../market_data/NQ_1min.csv \
+            --start-date $(python3 -c "import datetime; base=datetime.date(2016,6,1); print(base + datetime.timedelta(days=${{ matrix.chunk_id }}*182))") \
+            --end-date $(python3 -c "import datetime; base=datetime.date(2016,6,1); print(min(base + datetime.timedelta(days=(${{ matrix.chunk_id }}+1)*182 - 1), datetime.date(2026,5,29)))") \
+            --output results/chunk_${{ matrix.chunk_id }}.json \
+            --max-entries ${{ env.MAX_ENTRIES }} \
+            --max-contracts ${{ env.MAX_CONTRACTS }}
+
+      - name: Upload chunk result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-orb-nq-chunk-${{ matrix.chunk_id }}
+          path: ${{ env.PROJECT_DIR }}/results/chunk_${{ matrix.chunk_id }}.json
+          retention-days: 7
+
+  aggregate:
+    needs: backtest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Download all chunk results
+        uses: actions/download-artifact@v4
+        with:
+          path: all_chunks/
+          pattern: "v5-orb-nq-chunk-*"
+          merge-multiple: true
+
+      - name: Aggregate
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          python3 scripts/aggregate.py \
+            --glob "../../all_chunks/*.json" \
+            --output results/final_report.json
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-orb-nq-final-report
+          path: ${{ env.PROJECT_DIR }}/results/final_report.json
+          retention-days: 30
