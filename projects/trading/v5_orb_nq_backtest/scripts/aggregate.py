@@ -27,14 +27,40 @@ def load_chunk(path: str) -> dict:
         return json.load(f)
 
 
-def aggregate(chunks: list[dict]) -> dict:
-    all_trades = []
-    day_results = []
-    for c in sorted(chunks, key=lambda x: x.get("chunk", {}).get("start", "")):
-        all_trades.extend(c.get("trades", []))
-        day_results.extend(c.get("day_results", []))
+def chunk_total_pnl(chunk: dict) -> float:
+    return float(sum(t.get("net", 0.0) for t in chunk.get("trades", [])))
 
-    # Sort by date
+
+def aggregate(chunks: list[dict]) -> dict:
+    # Sort chunks chronologically.
+    sorted_chunks = sorted(chunks, key=lambda x: x.get("chunk", {}).get("start", ""))
+
+    all_trades: list[dict] = []
+    day_results: list[dict] = []
+
+    # Each chunk's day_results equity is chunk-local (starts at initial_capital).
+    # Add the cumulative PnL of all previous chunks to make a continuous global
+    # equity curve, then flatten and sort by date.
+    cumulative_offset = 0.0
+    initial_capital = 50_000.0
+    for c in sorted_chunks:
+        params = c.get("parameters", {})
+        if params.get("initial_capital") is not None:
+            initial_capital = params["initial_capital"]
+        chunk_pnl = chunk_total_pnl(c)
+        for r in c.get("day_results", []):
+            day_results.append(
+                {
+                    "date": r["date"],
+                    "trades": r.get("trades", 0),
+                    "day_pnl": r.get("day_pnl", 0.0),
+                    "equity": round(r["equity"] + cumulative_offset, 2),
+                }
+            )
+        all_trades.extend(c.get("trades", []))
+        cumulative_offset += chunk_pnl
+
+    # Sort by date globally.
     day_results = sorted(day_results, key=lambda x: x["date"])
 
     pnls = np.array([t["net"] for t in all_trades])

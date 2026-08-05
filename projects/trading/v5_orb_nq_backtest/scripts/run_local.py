@@ -39,8 +39,8 @@ def date_range_chunks(start: date, end: date, n_chunks: int) -> list[tuple[date,
     return chunks
 
 
-def run_chunk(args: tuple[int, tuple[date, date], str, int, int, Path]) -> str:
-    chunk_id, (start, end), input_path, max_entries, max_contracts, results_dir = args
+def run_chunk(args: tuple[int, tuple[date, date], str, int, int, Path, float | None]) -> str:
+    chunk_id, (start, end), input_path, max_entries, max_contracts, results_dir, baseline_index = args
     output_path = results_dir / f"chunk_{chunk_id:02d}.json"
     cmd = [
         sys.executable,
@@ -52,6 +52,8 @@ def run_chunk(args: tuple[int, tuple[date, date], str, int, int, Path]) -> str:
         "--max-entries", str(max_entries),
         "--max-contracts", str(max_contracts),
     ]
+    if baseline_index is not None:
+        cmd.extend(["--baseline-index", str(baseline_index)])
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT)
     subprocess.run(cmd, env=env, check=True)
@@ -66,14 +68,18 @@ def main() -> int:
     parser.add_argument("--max-contracts", type=int, default=5)
     parser.add_argument("--n-chunks", type=int, default=20)
     parser.add_argument("--workers", type=int, default=3, help="Max local workers (default 3)")
+    parser.add_argument("--baseline-index", type=float, default=None,
+                        help="Baseline index for daily scaling (default: project default)")
     args = parser.parse_args()
 
-    results_dir = Path(args.output).parent / "chunks"
+    # Keep chunk files for each variant separate so multiple runs can be kept.
+    variant = Path(args.output).stem
+    results_dir = Path(args.output).parent / "chunks" / variant
     results_dir.mkdir(parents=True, exist_ok=True)
 
     chunks = date_range_chunks(date(2016, 6, 1), date(2026, 5, 29), args.n_chunks)
     tasks = [
-        (i, chunk, args.input, args.max_entries, args.max_contracts, results_dir)
+        (i, chunk, args.input, args.max_entries, args.max_contracts, results_dir, args.baseline_index)
         for i, chunk in enumerate(chunks)
     ]
 
