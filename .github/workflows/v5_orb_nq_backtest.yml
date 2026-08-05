@@ -32,7 +32,7 @@ jobs:
       - name: Install rclone
         run: curl https://rclone.org/install.sh | sudo bash
 
-      - name: Configure rclone
+      - name: Download NQ data
         env:
           RCLONE_CONFIG_AKPANBRAIN_TYPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TYPE }}
           RCLONE_CONFIG_AKPANBRAIN_PROVIDER: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_PROVIDER }}
@@ -40,19 +40,6 @@ jobs:
           RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_AKPANBRAIN_ENDPOINT: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ENDPOINT }}
           RCLONE_CONFIG_AKPANBRAIN_REGION: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_REGION }}
-        run: |
-          mkdir -p ~/.config/rclone
-          cat > ~/.config/rclone/rclone.conf <<EOF
-          [akpanbrain]
-          type = ${RCLONE_CONFIG_AKPANBRAIN_TYPE}
-          provider = ${RCLONE_CONFIG_AKPANBRAIN_PROVIDER}
-          access_key_id = ${RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID}
-          secret_access_key = ${RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY}
-          endpoint = ${RCLONE_CONFIG_AKPANBRAIN_ENDPOINT}
-          region = ${RCLONE_CONFIG_AKPANBRAIN_REGION}
-          EOF
-
-      - name: Download NQ data
         run: |
           mkdir -p market_data
           rclone copy akpanbrain:data/market_data/NQ_1min.csv market_data/
