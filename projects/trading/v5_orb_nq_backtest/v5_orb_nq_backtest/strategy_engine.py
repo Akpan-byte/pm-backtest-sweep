@@ -52,6 +52,7 @@ class TFEngine:
         self.sl_pts: float = config.sl_pts
         self.buffer_pts: float = config.buffer_pts
         self.baseline_index: float = config.baseline_index
+        self.tick_value: float = getattr(config, "tick_value", TICK_VALUE)
 
         # Shared daily scaling parameters; StrategyProcessor mutates this object.
         self.day_params: DayParams = DayParams()
@@ -133,7 +134,7 @@ class TFEngine:
             self.day_params.buf,
         )
         del S, buf  # kept for parity with v4 unpacking
-        risk_dollars = sl_dist * TICK_VALUE
+        risk_dollars = sl_dist * self.tick_value
         if risk_dollars <= 0:
             return 1
         return max(1, round(self.risk_per_trade / risk_dollars))
@@ -179,7 +180,7 @@ class TFEngine:
             self.day_params.buf,
         )
         del S, buf  # kept for parity with v4 unpacking
-        risk_dollars = sl_dist * TICK_VALUE
+        risk_dollars = sl_dist * self.tick_value
         qty = (
             max(1, round(self.risk_per_trade / risk_dollars))
             if risk_dollars > 0
@@ -300,7 +301,7 @@ class TFEngine:
         pos = self.position
         self.position = None
         dir_sign = 1.0 if pos.direction == "Long" else -1.0
-        gross = pos.qty * dir_sign * (exit_price - pos.entry_price) * TICK_VALUE
+        gross = pos.qty * dir_sign * (exit_price - pos.entry_price) * self.tick_value
         fee_rate = 0.000016
         friction = pos.qty * (pos.entry_price + exit_price) * fee_rate
         net = gross - friction

@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--max-entries", type=int, default=2)
     parser.add_argument("--max-contracts", type=int, default=5)
     parser.add_argument("--baseline-index", type=float, default=None)
+    parser.add_argument("--tick-value", type=float, default=None)
     args = parser.parse_args()
 
     start = parse_date(args.start_date)
@@ -50,6 +51,8 @@ def main() -> int:
     params = {"max_entries": args.max_entries, "max_contracts": args.max_contracts}
     if args.baseline_index is not None:
         params["baseline_index"] = args.baseline_index
+    if args.tick_value is not None:
+        params["tick_value"] = args.tick_value
 
     result = run_backtest(df, strategy_params=params)
     result["chunk"] = {"start": str(start), "end": str(end)}

@@ -188,12 +188,15 @@ def main() -> int:
     parser.add_argument("--max-entries", type=int, default=2, help="Max entries per timeframe")
     parser.add_argument("--max-contracts", type=int, default=5, help="Global max contracts")
     parser.add_argument("--baseline-index", type=float, default=None, help="Override baseline index")
+    parser.add_argument("--tick-value", type=float, default=None, help="Override tick value (e.g., 5 for YM, 20 for NQ)")
     args = parser.parse_args()
 
     df = load_csv(args.input)
     params = {"max_entries": args.max_entries, "max_contracts": args.max_contracts}
     if args.baseline_index is not None:
         params["baseline_index"] = args.baseline_index
+    if args.tick_value is not None:
+        params["tick_value"] = args.tick_value
 
     result = run_backtest(df, strategy_params=params)
 

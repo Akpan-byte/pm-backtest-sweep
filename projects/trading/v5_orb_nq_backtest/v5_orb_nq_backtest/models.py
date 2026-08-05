@@ -38,6 +38,7 @@ class StrategyConfig:
     baseline_index: float = 29174.0
     max_entries: int = 4
     max_contracts: int = 5
+    tick_value: float = 20.0
 
 
 @dataclass

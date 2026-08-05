@@ -39,8 +39,8 @@ def date_range_chunks(start: date, end: date, n_chunks: int) -> list[tuple[date,
     return chunks
 
 
-def run_chunk(args: tuple[int, tuple[date, date], str, int, int, Path, float | None]) -> str:
-    chunk_id, (start, end), input_path, max_entries, max_contracts, results_dir, baseline_index = args
+def run_chunk(args: tuple[int, tuple[date, date], str, int, int, Path, float | None, float | None]) -> str:
+    chunk_id, (start, end), input_path, max_entries, max_contracts, results_dir, baseline_index, tick_value = args
     output_path = results_dir / f"chunk_{chunk_id:02d}.json"
     cmd = [
         sys.executable,
@@ -54,6 +54,8 @@ def run_chunk(args: tuple[int, tuple[date, date], str, int, int, Path, float | N
     ]
     if baseline_index is not None:
         cmd.extend(["--baseline-index", str(baseline_index)])
+    if tick_value is not None:
+        cmd.extend(["--tick-value", str(tick_value)])
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT)
     subprocess.run(cmd, env=env, check=True)
@@ -70,6 +72,8 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=3, help="Max local workers (default 3)")
     parser.add_argument("--baseline-index", type=float, default=None,
                         help="Baseline index for daily scaling (default: project default)")
+    parser.add_argument("--tick-value", type=float, default=None,
+                        help="Tick value (default: project default)")
     args = parser.parse_args()
 
     # Keep chunk files for each variant separate so multiple runs can be kept.
@@ -79,7 +83,7 @@ def main() -> int:
 
     chunks = date_range_chunks(date(2016, 6, 1), date(2026, 5, 29), args.n_chunks)
     tasks = [
-        (i, chunk, args.input, args.max_entries, args.max_contracts, results_dir, args.baseline_index)
+        (i, chunk, args.input, args.max_entries, args.max_contracts, results_dir, args.baseline_index, args.tick_value)
         for i, chunk in enumerate(chunks)
     ]
 

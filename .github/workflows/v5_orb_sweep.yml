@@ -1,0 +1,178 @@
+# CHANGE_SUMMARY
+# 2026-08-05  opencode
+#   - Created 12-variant parameter sweep workflow for v5 ORB on NQ and YM.
+#   - Matrix: symbol × max_entries [1, 2, 4, 6, 8, 12].
+#   - Each variant job downloads data and runs chunks sequentially with 2 workers.
+# WHY: Find the max_entries inflection point for the v5 ORB engine across both
+#      instruments in ~15–20 minutes of wall time on GitHub Actions.
+
+name: v5 ORB Parameter Sweep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # NQ variants
+          - symbol: NQ
+            tick_value: 20
+            baseline_index: 4524.25
+            data_file: NQ_1min.csv
+            max_entries: 1
+          - symbol: NQ
+            tick_value: 20
+            baseline_index: 4524.25
+            data_file: NQ_1min.csv
+            max_entries: 2
+          - symbol: NQ
+            tick_value: 20
+            baseline_index: 4524.25
+            data_file: NQ_1min.csv
+            max_entries: 4
+          - symbol: NQ
+            tick_value: 20
+            baseline_index: 4524.25
+            data_file: NQ_1min.csv
+            max_entries: 6
+          - symbol: NQ
+            tick_value: 20
+            baseline_index: 4524.25
+            data_file: NQ_1min.csv
+            max_entries: 8
+          - symbol: NQ
+            tick_value: 20
+            baseline_index: 4524.25
+            data_file: NQ_1min.csv
+            max_entries: 12
+          # YM variants
+          - symbol: YM
+            tick_value: 5
+            baseline_index: 17777.0
+            data_file: YM_1min.csv
+            max_entries: 1
+          - symbol: YM
+            tick_value: 5
+            baseline_index: 17777.0
+            data_file: YM_1min.csv
+            max_entries: 2
+          - symbol: YM
+            tick_value: 5
+            baseline_index: 17777.0
+            data_file: YM_1min.csv
+            max_entries: 4
+          - symbol: YM
+            tick_value: 5
+            baseline_index: 17777.0
+            data_file: YM_1min.csv
+            max_entries: 6
+          - symbol: YM
+            tick_value: 5
+            baseline_index: 17777.0
+            data_file: YM_1min.csv
+            max_entries: 8
+          - symbol: YM
+            tick_value: 5
+            baseline_index: 17777.0
+            data_file: YM_1min.csv
+            max_entries: 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Install rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+
+      - name: Configure rclone
+        env:
+          RCLONE_CONFIG_AKPANBRAIN_TYPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TYPE }}
+          RCLONE_CONFIG_AKPANBRAIN_PROVIDER: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_PROVIDER }}
+          RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_AKPANBRAIN_ENDPOINT: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ENDPOINT }}
+          RCLONE_CONFIG_AKPANBRAIN_REGION: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_REGION }}
+        run: |
+          mkdir -p ~/.config/rclone
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [akpanbrain]
+          type = ${RCLONE_CONFIG_AKPANBRAIN_TYPE}
+          provider = ${RCLONE_CONFIG_AKPANBRAIN_PROVIDER}
+          access_key_id = ${RCLONE_CONFIG_AKPANBRAIN_ACCESS_KEY_ID}
+          secret_access_key = ${RCLONE_CONFIG_AKPANBRAIN_SECRET_ACCESS_KEY}
+          endpoint = ${RCLONE_CONFIG_AKPANBRAIN_ENDPOINT}
+          region = ${RCLONE_CONFIG_AKPANBRAIN_REGION}
+          EOF
+
+      - name: Download market data
+        run: |
+          mkdir -p market_data
+          rclone copy akpanbrain:data/market_data/${{ matrix.data_file }} market_data/
+          ls -lh market_data/${{ matrix.data_file }}
+
+      - name: Run variant
+        run: |
+          cd projects/trading/v5_orb_nq_backtest
+          python3 scripts/run_local.py \
+            --input ../../market_data/${{ matrix.data_file }} \
+            --output results/${{ matrix.symbol }}_${{ matrix.max_entries }}_final_report.json \
+            --max-entries ${{ matrix.max_entries }} \
+            --max-contracts 5 \
+            --baseline-index ${{ matrix.baseline_index }} \
+            --tick-value ${{ matrix.tick_value }} \
+            --workers 2
+
+      - name: Upload variant result
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-orb-sweep-${{ matrix.symbol }}-${{ matrix.max_entries }}
+          path: projects/trading/v5_orb_nq_backtest/results/${{ matrix.symbol }}_${{ matrix.max_entries }}_final_report.json
+          retention-days: 30
+
+  summarize:
+    needs: sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download all variant results
+        uses: actions/download-artifact@v4
+        with:
+          path: sweep_results/
+          pattern: "v5-orb-sweep-*"
+          merge-multiple: true
+
+      - name: Summarize
+        run: |
+          python3 - <<'PY'
+          import json, glob
+          files = sorted(glob.glob("sweep_results/*_final_report.json"))
+          print("| Symbol | max_entries | Trades | Net PnL | Win Rate | PF | Max DD ($) | Max DD (%) |")
+          print("|---|---:|---:|---:|---:|---:|---:|---:|")
+          for f in files:
+              data = json.load(open(f))
+              m = data["metrics"]
+              symbol, me = f.split("/")[-1].replace("_final_report.json", "").split("_")
+              print(f"| {symbol} | {me} | {m['total_trades']:,} | ${m['net_pnl']:,.2f} | {m['win_rate']:.1f}% | {m['profit_factor']:.2f} | ${m['max_drawdown_dollars']:,.2f} | {m['max_drawdown_pct']:.2f}% |")
+          PY
+
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: v5-orb-sweep-summary
+          path: sweep_results/
+          retention-days: 30
