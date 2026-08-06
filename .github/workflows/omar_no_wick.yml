@@ -51,10 +51,10 @@ jobs:
           cd strategies/omar_no_wick
           python3 run_backtest.py \
             --data-path "../../data/${{ matrix.symbol }}_5min.csv" \
-            --output "results/no_wick_${{ matrix.symbol | lower }}.json" \
+            --output "results/no_wick_${{ matrix.symbol }}.json" \
             --pip-size 1.0 --min-sl-pips 5.0
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
           name: no-wick-${{ matrix.symbol }}
-          path: strategies/omar_no_wick/results/no_wick_${{ matrix.symbol | lower }}.json
+          path: strategies/omar_no_wick/results/no_wick_${{ matrix.symbol }}.json
