@@ -1,0 +1,60 @@
+# CHANGE_SUMMARY
+# 2026-08-06  kilo
+#   - Parallel No Wick strategy backtests on NQ/ES/YM 5m data.
+#   - Matrix runs each symbol on a separate GitHub-hosted runner.
+
+name: omar_no_wick_backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      nq_url:
+        description: 'URL to NQ_5min.csv'
+        required: true
+      es_url:
+        description: 'URL to ES_5min.csv'
+        required: true
+      ym_url:
+        description: 'URL to YM_5min.csv'
+        required: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - symbol: NQ
+            url_input: nq_url
+          - symbol: ES
+            url_input: es_url
+          - symbol: YM
+            url_input: ym_url
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install pandas numpy
+      - name: Fetch data
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          url="${{ github.event.inputs[matrix.url_input] }}"
+          echo "Downloading ${{ matrix.symbol }} from $url"
+          curl -L -o "data/${{ matrix.symbol }}_5min.csv" "$url"
+      - name: Run No Wick backtest
+        run: |
+          cd strategies/omar_no_wick
+          python3 run_backtest.py \
+            --data-path "../../data/${{ matrix.symbol }}_5min.csv" \
+            --output "results/no_wick_${{ matrix.symbol | lower }}.json" \
+            --pip-size 1.0 --min-sl-pips 5.0
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: no-wick-${{ matrix.symbol }}
+          path: strategies/omar_no_wick/results/no_wick_${{ matrix.symbol | lower }}.json
