@@ -18,13 +18,15 @@ Rules implemented:
 """
 from __future__ import annotations
 
+from datetime import datetime, time
+
 import numpy as np
 import pandas as pd
 
 
 def detect_structure(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Build external market structure state bar-by-bar.
+    Build external market structure state bar-by-bar (numpy-vectorized loop).
 
     Uses only information available at or before each bar (no lookahead):
     - swing_highs / swing_lows confirmed retrospectively by body closes.
@@ -35,20 +37,29 @@ def detect_structure(df: pd.DataFrame) -> pd.DataFrame:
     n = len(df)
     result = df.copy()
 
-    # Working arrays
+    close = df["close"].values
+    high = df["high"].values
+    low = df["low"].values
+
+    # 3-bar pivots (confirmed on the third bar, so no future leak beyond i).
     swing_high = np.full(n, np.nan)
     swing_low = np.full(n, np.nan)
+    for j in range(1, n - 1):
+        if high[j] > high[j - 1] and high[j] > high[j + 1]:
+            swing_high[j] = high[j]
+        if low[j] < low[j - 1] and low[j] < low[j + 1]:
+            swing_low[j] = low[j]
+
     confirmed_HH = np.full(n, np.nan)
     confirmed_LL = np.full(n, np.nan)
     confirmed_HL = np.full(n, np.nan)
     confirmed_LH = np.full(n, np.nan)
     trend_state = np.zeros(n, dtype=int)
 
-    # Recent confirmed indices for HL/LH lookup
     last_HH_idx = -1
     last_LL_idx = -1
-    last_HL_idx = -1
-    last_LH_idx = -1
+    low_since_HH = np.nan
+    high_since_LL = np.nan
 
     for i in range(1, n):
         # Carry forward previous confirmed levels
@@ -58,60 +69,35 @@ def detect_structure(df: pd.DataFrame) -> pd.DataFrame:
         confirmed_LH[i] = confirmed_LH[i - 1]
         trend_state[i] = trend_state[i - 1]
 
-        body_close = df["close"].iloc[i]
-        prev_close = df["close"].iloc[i - 1]
+        body_close = close[i]
 
-        # Determine if this bar creates a new swing high/low based on close vs prior close.
-        # A swing high is a local high relative to neighbours (simplified).
-        # We use a 3-bar pivot for swing detection.
-        if i >= 2:
-            if df["high"].iloc[i - 1] > df["high"].iloc[i - 2] and df["high"].iloc[i - 1] > df["high"].iloc[i]:
-                swing_high[i - 1] = df["high"].iloc[i - 1]
-            if df["low"].iloc[i - 1] < df["low"].iloc[i - 2] and df["low"].iloc[i - 1] < df["low"].iloc[i]:
-                swing_low[i - 1] = df["low"].iloc[i - 1]
+        # Update running extremes since last confirmed swing
+        if last_HH_idx >= 0:
+            if np.isnan(low_since_HH) or low[i] < low_since_HH:
+                low_since_HH = low[i]
+        if last_LL_idx >= 0:
+            if np.isnan(high_since_LL) or high[i] > high_since_LL:
+                high_since_LL = high[i]
 
-        # Structure breaks require BODY CLOSE beyond prior confirmed levels.
-        # On first few bars, establish initial structure from pivots.
         if not np.isnan(confirmed_HH[i]) and not np.isnan(confirmed_LL[i]):
-            # Uptrend state: need HH and HL
-            # Downtrend state: need LH and LL
-            # BOS up: body close above HH
             if body_close > confirmed_HH[i]:
-                # Bullish BOS. Confirm the most recent HL (snake method).
-                # Scan back from previous bar to last LL/HL region.
-                # Use the lowest wick in the pullback since the last HH.
-                scan_start = last_HH_idx if last_HH_idx >= 0 else 0
-                low_wick = df["low"].iloc[scan_start:i].min()
-                confirmed_HL[i] = low_wick
+                # Bullish BOS: confirm HL as lowest low since last HH
+                confirmed_HL[i] = low_since_HH if not np.isnan(low_since_HH) else low[i]
                 confirmed_HH[i] = body_close
                 last_HH_idx = i
-                last_HL_idx = i
                 trend_state[i] = 1
+                low_since_HH = low[i]
 
-            # BOS down: body close below LL
             elif body_close < confirmed_LL[i]:
-                scan_start = last_LL_idx if last_LL_idx >= 0 else 0
-                high_wick = df["high"].iloc[scan_start:i].max()
-                confirmed_LH[i] = high_wick
+                # Bearish BOS: confirm LH as highest high since last LL
+                confirmed_LH[i] = high_since_LL if not np.isnan(high_since_LL) else high[i]
                 confirmed_LL[i] = body_close
                 last_LL_idx = i
-                last_LH_idx = i
                 trend_state[i] = -1
-
-            # CHOCH up (reversal attempt): body close above LH in downtrend
-            elif trend_state[i] == -1 and not np.isnan(confirmed_LH[i]) and body_close > confirmed_LH[i]:
-                # Step 1 of reversal. Track as potential reversal.
-                # We don't switch trend yet.
-                pass
-
-            # CHOCH down (reversal attempt): body close below HL in uptrend
-            elif trend_state[i] == 1 and not np.isnan(confirmed_HL[i]) and body_close < confirmed_HL[i]:
-                # Step 1 of reversal. Track as potential reversal.
-                pass
+                high_since_LL = high[i]
 
         else:
-            # Bootstrap: use swing pivots to set initial HH/LL
-            # Find most recent non-nan swing high/low
+            # Bootstrap from completed swing pivots
             sh_idx = np.where(~np.isnan(swing_high[:i]))[0]
             sl_idx = np.where(~np.isnan(swing_low[:i]))[0]
             if len(sh_idx) > 0 and len(sl_idx) > 0:
@@ -122,15 +108,14 @@ def detect_structure(df: pd.DataFrame) -> pd.DataFrame:
                 last_HH_idx = last_sh
                 last_LL_idx = last_sl
                 if confirmed_HH[i] > confirmed_LL[i]:
-                    # crude initial trend based on order
                     if last_sh > last_sl:
                         trend_state[i] = 1
                         confirmed_HL[i] = confirmed_LL[i]
-                        last_HL_idx = last_sl
+                        low_since_HH = low[i]
                     else:
                         trend_state[i] = -1
                         confirmed_LH[i] = confirmed_HH[i]
-                        last_LH_idx = last_sh
+                        high_since_LL = high[i]
 
     result["swing_high"] = swing_high
     result["swing_low"] = swing_low
@@ -175,27 +160,17 @@ def detect_a_setups(df_struct: pd.DataFrame) -> pd.DataFrame:
 
 def detect_no_wick(df: pd.DataFrame, pip_tol: float = 0.0) -> pd.DataFrame:
     """
-    Detect No-Wick candles.
+    Detect No-Wick candles (vectorized).
 
     Bullish: green candle with bottom wick == 0 (low == open within tolerance).
     Bearish: red candle with top wick == 0 (high == open within tolerance).
     """
-    n = len(df)
-    no_wick_long = np.zeros(n, dtype=int)
-    no_wick_short = np.zeros(n, dtype=int)
-
-    for i in range(n):
-        o = df["open"].iloc[i]
-        h = df["high"].iloc[i]
-        l = df["low"].iloc[i]
-        c = df["close"].iloc[i]
-        if c > o and abs(l - o) <= pip_tol:
-            no_wick_long[i] = 1
-        elif c < o and abs(h - o) <= pip_tol:
-            no_wick_short[i] = 1
-
-    df["no_wick_long"] = no_wick_long
-    df["no_wick_short"] = no_wick_short
+    o = df["open"].values
+    h = df["high"].values
+    l = df["low"].values
+    c = df["close"].values
+    df["no_wick_long"] = ((c > o) & (np.abs(l - o) <= pip_tol)).astype(int)
+    df["no_wick_short"] = ((c < o) & (np.abs(h - o) <= pip_tol)).astype(int)
     return df
 
 
@@ -211,7 +186,11 @@ def simulate_no_wick(df: pd.DataFrame,
                      daily_loss_cap: int = 2,
                      rollover_hour: int = 17,
                      commission: float = 0.0001,
-                     starting_equity: float = 100000.0):
+                     starting_equity: float = 100000.0,
+                     session_start: str | None = None,
+                     session_end: str | None = None,
+                     close_at_session_end: bool = True,
+                     signal_mask: pd.Series | None = None):
     """
     Bar-by-bar limit-order simulation with no lookahead.
     """
@@ -228,11 +207,44 @@ def simulate_no_wick(df: pd.DataFrame,
     active_trade = None
     resting_order = None  # dict with details
 
+    # Parse session windows once
+    start_t = datetime.strptime(session_start, "%H:%M").time() if session_start else None
+    end_t = datetime.strptime(session_end, "%H:%M").time() if session_end else None
+
     for i in range(n):
         ts = df.index[i]
         date_key = ts.date()
         day_wins = daily_wins.get(date_key, 0)
         day_losses = daily_losses.get(date_key, 0)
+        t = ts.time()
+        in_session = True
+        if start_t and end_t:
+            in_session = start_t <= t < end_t
+        elif start_t:
+            in_session = start_t <= t
+        elif end_t:
+            in_session = t < end_t
+
+        # Close active trade at session end
+        if close_at_session_end and active_trade is not None and not in_session:
+            exit_price = df["close"].iloc[i]
+            pos = active_trade["direction"]
+            raw_pnl = pos * (exit_price - active_trade["entry_price"])
+            cost = exit_price * commission
+            pnl = raw_pnl - cost
+            cash += pnl
+            active_trade["exit_time"] = str(ts)
+            active_trade["exit_price"] = exit_price
+            active_trade["pnl"] = pnl
+            active_trade["exit_reason"] = "session_close"
+            trades.append(active_trade)
+            if pnl > 0:
+                day_wins += 1
+            else:
+                day_losses += 1
+            daily_wins[date_key] = day_wins
+            daily_losses[date_key] = day_losses
+            active_trade = None
 
         # Check rollover for active trade
         if active_trade is not None and ts.hour == rollover_hour and ts.minute == 0:
@@ -296,6 +308,10 @@ def simulate_no_wick(df: pd.DataFrame,
                 daily_losses[date_key] = day_losses
                 active_trade = None
 
+        # Cancel resting order outside session
+        if resting_order is not None and not in_session:
+            resting_order = None
+
         # Manage resting order
         if resting_order is not None:
             # Check expiration
@@ -336,8 +352,9 @@ def simulate_no_wick(df: pd.DataFrame,
                     if came_close and hit_tp:
                         resting_order = None
 
-        # Generate new signal if flat, no resting order, and daily cap not hit
-        if active_trade is None and resting_order is None and not day_done:
+        # Generate new signal if flat, no resting order, daily cap not hit, in session, and filter mask passes
+        mask_pass = True if signal_mask is None else bool(signal_mask.iloc[i])
+        if active_trade is None and resting_order is None and not day_done and in_session and mask_pass:
             trend = df["trend_state"].iloc[i]
             # Use confirmed A-setup presence (we require trend to have just flipped or be active)
             long_signal = (trend == 1 and df["no_wick_long"].iloc[i] == 1)

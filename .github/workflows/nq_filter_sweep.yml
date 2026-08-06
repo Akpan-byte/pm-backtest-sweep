@@ -1,0 +1,434 @@
+# CHANGE_SUMMARY
+# 2026-08-06  kilo
+#   - Parallel NQ No-Wick filter sweep on market hours.
+
+name: nq_filter_sweep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        config: [
+      {
+            "name": "baseline_market_hours",
+            "filters": "none",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "baseline_premarket_plus",
+            "filters": "none",
+            "start": "04:00",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop",
+            "filters": "atr_chop",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx",
+            "filters": "adx",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume",
+            "filters": "volume",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "body",
+            "filters": "body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "iv_wall",
+            "filters": "iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "skip_open_close",
+            "filters": "skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx",
+            "filters": "atr_chop,adx",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume",
+            "filters": "atr_chop,volume",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+body",
+            "filters": "atr_chop,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+iv_wall",
+            "filters": "atr_chop,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+skip_open_close",
+            "filters": "atr_chop,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume",
+            "filters": "adx,volume",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+body",
+            "filters": "adx,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+iv_wall",
+            "filters": "adx,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+skip_open_close",
+            "filters": "adx,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+body",
+            "filters": "volume,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+iv_wall",
+            "filters": "volume,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+skip_open_close",
+            "filters": "volume,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "body+iv_wall",
+            "filters": "body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "body+skip_open_close",
+            "filters": "body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "iv_wall+skip_open_close",
+            "filters": "iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume",
+            "filters": "atr_chop,adx,volume",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+body",
+            "filters": "atr_chop,adx,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+iv_wall",
+            "filters": "atr_chop,adx,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+skip_open_close",
+            "filters": "atr_chop,adx,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+body",
+            "filters": "atr_chop,volume,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+iv_wall",
+            "filters": "atr_chop,volume,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+skip_open_close",
+            "filters": "atr_chop,volume,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+body+iv_wall",
+            "filters": "atr_chop,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+body+skip_open_close",
+            "filters": "atr_chop,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+iv_wall+skip_open_close",
+            "filters": "atr_chop,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+body",
+            "filters": "adx,volume,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+iv_wall",
+            "filters": "adx,volume,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+skip_open_close",
+            "filters": "adx,volume,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+body+iv_wall",
+            "filters": "adx,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+body+skip_open_close",
+            "filters": "adx,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+iv_wall+skip_open_close",
+            "filters": "adx,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+body+iv_wall",
+            "filters": "volume,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+body+skip_open_close",
+            "filters": "volume,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+iv_wall+skip_open_close",
+            "filters": "volume,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "body+iv_wall+skip_open_close",
+            "filters": "body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+body",
+            "filters": "atr_chop,adx,volume,body",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+iv_wall",
+            "filters": "atr_chop,adx,volume,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+skip_open_close",
+            "filters": "atr_chop,adx,volume,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+body+iv_wall",
+            "filters": "atr_chop,adx,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+body+skip_open_close",
+            "filters": "atr_chop,adx,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+iv_wall+skip_open_close",
+            "filters": "atr_chop,adx,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+body+iv_wall",
+            "filters": "atr_chop,volume,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+body+skip_open_close",
+            "filters": "atr_chop,volume,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+iv_wall+skip_open_close",
+            "filters": "atr_chop,volume,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+body+iv_wall+skip_open_close",
+            "filters": "atr_chop,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+body+iv_wall",
+            "filters": "adx,volume,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+body+skip_open_close",
+            "filters": "adx,volume,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+iv_wall+skip_open_close",
+            "filters": "adx,volume,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+body+iv_wall+skip_open_close",
+            "filters": "adx,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "volume+body+iv_wall+skip_open_close",
+            "filters": "volume,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+body+iv_wall",
+            "filters": "atr_chop,adx,volume,body,iv_wall",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+body+skip_open_close",
+            "filters": "atr_chop,adx,volume,body,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+iv_wall+skip_open_close",
+            "filters": "atr_chop,adx,volume,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+body+iv_wall+skip_open_close",
+            "filters": "atr_chop,adx,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+volume+body+iv_wall+skip_open_close",
+            "filters": "atr_chop,volume,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "adx+volume+body+iv_wall+skip_open_close",
+            "filters": "adx,volume,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      },
+      {
+            "name": "atr_chop+adx+volume+body+iv_wall+skip_open_close",
+            "filters": "atr_chop,adx,volume,body,iv_wall,skip_open_close",
+            "start": "09:30",
+            "end": "16:00"
+      }
+]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install pandas numpy
+      - name: Fetch NQ data
+        run: |
+          mkdir -p data
+          curl -L -o data/NQ_5min.csv https://github.com/Akpan-byte/pm-backtest-sweep/releases/download/omar-data-20260806/NQ_5min.csv
+      - name: Run config
+        run: |
+          cd strategies/omar_no_wick
+          python3 run_config.py \
+            --data-path ../../data/NQ_5min.csv \
+            --filters "${{ matrix.config.filters }}" \
+            --session-start "${{ matrix.config.start }}" \
+            --session-end "${{ matrix.config.end }}" \
+            --output "results/${{ matrix.config.name }}.json"
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${ matrix.config.name }
+          path: strategies/omar_no_wick/results/${ matrix.config.name }.json
