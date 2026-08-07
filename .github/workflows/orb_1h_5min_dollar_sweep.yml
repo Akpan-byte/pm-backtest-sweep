@@ -1,0 +1,172 @@
+# CHANGE_SUMMARY
+# 2026-08-07  kilo
+#   - Created GitHub Actions workflow for 1h-signal / 5min-execution ORB
+#     dollar stop/target sweep on NQ. Falls back from Akpan laptop which
+#     went offline under parallel load.
+# WHY: Need distributed compute to finish the sweep after laptop crashed.
+
+name: ORB 1h Signal 5min Execution Dollar Sweep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prepare-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Install rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+
+      - name: Download NQ 1-minute data
+        env:
+          RCLONE_CONFIG_AKPANBRAIN_TYPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TYPE }}
+          RCLONE_CONFIG_AKPANBRAIN_SCOPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_SCOPE }}
+          RCLONE_CONFIG_AKPANBRAIN_CLIENT_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_CLIENT_ID }}
+          RCLONE_CONFIG_AKPANBRAIN_CLIENT_SECRET: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_CLIENT_SECRET }}
+          RCLONE_CONFIG_AKPANBRAIN_TOKEN: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TOKEN }}
+          RCLONE_CONFIG_AKPANBRAIN_ROOT_FOLDER_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ROOT_FOLDER_ID }}
+        run: |
+          mkdir -p market_data
+          rclone copy akpanbrain:data/market_data/NQ_1min.csv market_data/
+          ls -lh market_data/NQ_1min.csv
+
+      - name: Resample to 1h and 5min
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'strategies/orb_nq')
+          from data import load_ohlcv
+          df = load_ohlcv('market_data/NQ_1min.csv')
+          for freq, fname in [('1h', 'NQ_1h.csv'), ('5min', 'NQ_5min.csv')]:
+              resampled = df.resample(freq, label='left', closed='left').agg({
+                  'open': 'first', 'high': 'max', 'low': 'min',
+                  'close': 'last', 'volume': 'sum',
+              }).dropna()
+              resampled.to_csv(f'market_data/{fname}')
+              print(f'{fname}: {len(resampled)} rows')
+          PY
+
+      - name: Upload resampled data
+        uses: actions/upload-artifact@v4
+        with:
+          name: orb-1h-5min-data
+          path: market_data/NQ_*.csv
+          retention-days: 1
+          compression-level: 0
+
+  sweep:
+    needs: prepare-data
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dollar_stop: 900
+            dollar_target: 500
+          - dollar_stop: 900
+            dollar_target: 1000
+          - dollar_stop: 900
+            dollar_target: 1500
+          - dollar_stop: 1500
+            dollar_target: 1000
+          - dollar_stop: 1500
+            dollar_target: 1500
+          - dollar_stop: 1500
+            dollar_target: 2000
+          - dollar_stop: 2000
+            dollar_target: 1000
+          - dollar_stop: 2000
+            dollar_target: 2000
+          - dollar_stop: 2000
+            dollar_target: 3000
+          - dollar_stop: 3000
+            dollar_target: 1000
+          - dollar_stop: 3000
+            dollar_target: 2000
+          - dollar_stop: 3000
+            dollar_target: 3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas
+
+      - name: Download data
+        uses: actions/download-artifact@v4
+        with:
+          name: orb-1h-5min-data
+          path: market_data/
+
+      - name: Run config
+        run: |
+          python3 strategies/orb_nq/run_1h_5min_dollar.py \
+            --input-1min market_data/NQ_1min.csv \
+            --dollar-stop ${{ matrix.dollar_stop }} \
+            --dollar-target ${{ matrix.dollar_target }} \
+            --or-minutes 240 \
+            --contract-value 20.0 \
+            --output results/orb_1h_5min_ds${{ matrix.dollar_stop }}_dt${{ matrix.dollar_target }}.json
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orb-1h-5min-ds${{ matrix.dollar_stop }}-dt${{ matrix.dollar_target }}
+          path: results/orb_1h_5min_ds${{ matrix.dollar_stop }}_dt${{ matrix.dollar_target }}.json
+          retention-days: 7
+
+  summarize:
+    needs: sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: sweep_results/
+          pattern: "orb-1h-5min-ds*"
+          merge-multiple: true
+
+      - name: Summarize
+        run: |
+          python3 - <<'PY'
+          import json, glob
+          files = sorted(glob.glob("sweep_results/orb_1h_5min_ds*.json"))
+          rows = []
+          for f in files:
+              d = json.load(open(f))
+              rows.append(d)
+          rows.sort(key=lambda x: (x["dollar_stop"], x["dollar_target"]))
+          print("| Stop | Target | Trades | Win Rate | Total Return | Max DD | Sharpe | >$900 | >$3k |")
+          print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+          for d in rows:
+              print(f"| {d['dollar_stop']} | {d['dollar_target']} | {d['total_trades']} | {d['win_rate']:.1%} | {d['total_return']:.2%} | {d['max_drawdown']:.2%} | {d['sharpe']:.3f} | {d['days_exceed_900']} | {d['days_exceed_3000']} |")
+          with open("sweep_results/summary.json", "w") as f:
+              json.dump({"results": rows}, f, indent=2)
+          PY
+
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: orb-1h-5min-summary
+          path: sweep_results/
+          retention-days: 30
