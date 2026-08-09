@@ -1,0 +1,86 @@
+# CHANGE_SUMMARY
+# 2026-08-09  kilo
+#   - Added VWAP fade scalper sweep across NQ/ES/YM for prop-firm payout analysis.
+# WHY: Test whether a higher-frequency mean-reversion approach can hit Topstep's
+#      first-week payout window.
+
+name: Scalp VWAP Fade Sweep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - symbol: NQ
+            contract_value: 20
+          - symbol: ES
+            contract_value: 50
+          - symbol: YM
+            contract_value: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy pandas
+      - run: curl https://rclone.org/install.sh | sudo bash
+      - name: Download 1-minute data
+        env:
+          RCLONE_CONFIG_AKPANBRAIN_TYPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TYPE }}
+          RCLONE_CONFIG_AKPANBRAIN_SCOPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_SCOPE }}
+          RCLONE_CONFIG_AKPANBRAIN_CLIENT_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_CLIENT_ID }}
+          RCLONE_CONFIG_AKPANBRAIN_CLIENT_SECRET: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_CLIENT_SECRET }}
+          RCLONE_CONFIG_AKPANBRAIN_TOKEN: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TOKEN }}
+          RCLONE_CONFIG_AKPANBRAIN_ROOT_FOLDER_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ROOT_FOLDER_ID }}
+        run: |
+          mkdir -p market_data
+          rclone copy akpanbrain:data/market_data/${{ matrix.symbol }}_1min.csv market_data/
+          ls -lh market_data/${{ matrix.symbol }}_1min.csv
+      - name: Run sweep
+        run: |
+          python3 strategies/scalp_prototype/run_full_sweep.py \
+            --data market_data/${{ matrix.symbol }}_1min.csv \
+            --contract-value ${{ matrix.contract_value }} \
+            --symbol ${{ matrix.symbol }} \
+            --output results/scalp_vwap_fade_${{ matrix.symbol }}_sweep.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scalp-vwap-fade-${{ matrix.symbol }}
+          path: results/scalp_vwap_fade_${{ matrix.symbol }}_sweep.json
+          retention-days: 7
+
+  summarize:
+    needs: sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: results/
+          pattern: "scalp-vwap-fade-*"
+          merge-multiple: true
+      - name: Print summary
+        run: |
+          python3 - <<'PY'
+          import json, glob
+          for f in sorted(glob.glob("results/scalp_vwap_fade_*_sweep.json")):
+              d = json.load(open(f))
+              print(f"\n=== {f} ===")
+              best_50k = max(d['results'], key=lambda r: r['sim_50k']['total_payout_dollars'])
+              best_150k = max(d['results'], key=lambda r: r['sim_150k']['total_payout_dollars'])
+              fastest_50k = min([r for r in d['results'] if r['sim_50k']['first_payout_days'] is not None],
+                                key=lambda r: r['sim_50k']['first_payout_days'])
+              print("Best 50k payout:", {k: best_50k[k] for k in ['symbol','threshold','target','stop','max_trades','session_end','total_trades','win_rate','total_dollars']}, best_50k['sim_50k'])
+              print("Fastest 50k payout:", {k: fastest_50k[k] for k in ['symbol','threshold','target','stop','max_trades','session_end']}, fastest_50k['sim_50k'])
+              print("Best 150k payout:", {k: best_150k[k] for k in ['symbol','threshold','target','stop','max_trades','session_end','total_trades','win_rate','total_dollars']}, best_150k['sim_150k'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scalp-vwap-fade-summary
+          path: results/
+          retention-days: 30
