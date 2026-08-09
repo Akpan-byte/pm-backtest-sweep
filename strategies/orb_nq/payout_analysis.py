@@ -13,6 +13,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent))
 from data import load_ohlcv
 from orb_1h_5min_dollar import backtest_1h_5min_dollar
+from orb_clean import backtest_orb_clean
 
 
 def resample_ohlcv(df_1min: pd.DataFrame, freq: str) -> pd.DataFrame:
@@ -199,10 +200,12 @@ def main():
     else:
         tf_minutes = {"1h": 60, "4h": 240}[args.or_tf]
         df_tf = resample_ohlcv(df_1min, args.or_tf)
-        result = backtest_clean_orb(df_tf, df_1min, tf_minutes, args.stop_mult)
-        daily_pnl = result["daily_pnl"]
+        # orb_clean returns pnl in $5/point (MNQ); scale to full NQ ($20/point) for payout analysis
+        result = backtest_orb_clean(df_tf, tf_minutes, args.stop_mult)
+        raw_daily_pnl = result["daily_pnl"]
+        daily_pnl = {date: pnl * 4.0 for date, pnl in raw_daily_pnl.items()}
         wins = sum(1 for t in result["trades"] if t["pnl_dollars"] > 0)
-        total = sum(t["pnl_dollars"] for t in result["trades"])
+        total = sum(t["pnl_dollars"] for t in result["trades"]) * 4.0
         metrics = {
             "total_trades": len(result["trades"]),
             "win_rate": wins / len(result["trades"]) if result["trades"] else 0.0,
