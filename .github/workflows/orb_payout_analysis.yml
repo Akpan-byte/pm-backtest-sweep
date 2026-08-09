@@ -1,0 +1,139 @@
+# CHANGE_SUMMARY
+# 2026-08-09  kilo
+#   - Added payout-analysis workflow for Topstep-style rules:
+#     5 active days minimum, consistency (no day > 50% of total profit),
+#     40% payout of balance growth.
+# WHY: Answer user's question about real payout amounts from viable ORB configs.
+
+name: ORB Payout Analysis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prepare-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy pandas
+      - run: curl https://rclone.org/install.sh | sudo bash
+      - name: Download NQ 1-minute data
+        env:
+          RCLONE_CONFIG_AKPANBRAIN_TYPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TYPE }}
+          RCLONE_CONFIG_AKPANBRAIN_SCOPE: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_SCOPE }}
+          RCLONE_CONFIG_AKPANBRAIN_CLIENT_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_CLIENT_ID }}
+          RCLONE_CONFIG_AKPANBRAIN_CLIENT_SECRET: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_CLIENT_SECRET }}
+          RCLONE_CONFIG_AKPANBRAIN_TOKEN: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_TOKEN }}
+          RCLONE_CONFIG_AKPANBRAIN_ROOT_FOLDER_ID: ${{ secrets.RCLONE_CONFIG_AKPANBRAIN_ROOT_FOLDER_ID }}
+        run: |
+          mkdir -p market_data
+          rclone copy akpanbrain:data/market_data/NQ_1min.csv market_data/
+          ls -lh market_data/NQ_1min.csv
+      - name: Resample data
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'strategies/orb_nq')
+          from data import load_ohlcv
+          df = load_ohlcv('market_data/NQ_1min.csv')
+          for freq, fname in [('1h', 'NQ_1h.csv'), ('5min', 'NQ_5min.csv'), ('4h', 'NQ_4h.csv')]:
+              resampled = df.resample(freq, label='left', closed='left').agg({
+                  'open': 'first', 'high': 'max', 'low': 'min',
+                  'close': 'last', 'volume': 'sum',
+              }).dropna()
+              resampled.to_csv(f'market_data/{fname}')
+              print(f'{fname}: {len(resampled)} rows')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orb-payout-data
+          path: market_data/NQ_*.csv
+          retention-days: 1
+          compression-level: 0
+
+  analyze:
+    needs: prepare-data
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: dollar_900_1500
+            type: dollar
+            dollar_stop: 900
+            dollar_target: 1500
+            or_tf: ''
+            stop_mult: 0
+          - name: dollar_3000_3000
+            type: dollar
+            dollar_stop: 3000
+            dollar_target: 3000
+            or_tf: ''
+            stop_mult: 0
+          - name: clean_4h
+            type: clean
+            dollar_stop: 0
+            dollar_target: 0
+            or_tf: 4h
+            stop_mult: 0.5
+          - name: clean_1h
+            type: clean
+            dollar_stop: 0
+            dollar_target: 0
+            or_tf: 1h
+            stop_mult: 0.75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install numpy pandas
+      - uses: actions/download-artifact@v4
+        with:
+          name: orb-payout-data
+          path: market_data/
+      - name: Run payout analysis
+        run: |
+          python3 strategies/orb_nq/payout_analysis.py \
+            --type ${{ matrix.type }} \
+            --name ${{ matrix.name }} \
+            --dollar-stop ${{ matrix.dollar_stop }} \
+            --dollar-target ${{ matrix.dollar_target }} \
+            --or-tf "${{ matrix.or_tf }}" \
+            --stop-mult ${{ matrix.stop_mult }} \
+            --output results/${{ matrix.name }}_payout.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orb-payout-${{ matrix.name }}
+          path: results/${{ matrix.name }}_payout.json
+          retention-days: 7
+
+  summarize:
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          path: payout_results/
+          pattern: "orb-payout-*"
+          merge-multiple: true
+      - name: Print payout summary
+        run: |
+          python3 - <<'PY'
+          import json, glob
+          for f in sorted(glob.glob("payout_results/*_payout.json")):
+              d = json.load(open(f))
+              print(json.dumps(d, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orb-payout-summary
+          path: payout_results/
+          retention-days: 30
