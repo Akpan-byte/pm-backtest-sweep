@@ -1,0 +1,270 @@
+name: ORB Fade Losing Legs Sweep (Luxembourg 2d)
+
+on: workflow_dispatch
+
+env:
+  PM_DIR: /tmp/pm_btc_5m
+  HL_SPOT_CSV: /tmp/hl_spot_BTC.csv
+  BN_SPOT_CSV: /tmp/bin_spot_btcusdt.csv
+  WINDOW_START: "2026-07-23T00:00:00+00:00"
+  WINDOW_END: "2026-07-25T23:59:59+00:00"
+
+jobs:
+  # ── Phase 1: Download PM data and build spot feeds ─────────────────────────
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install requests
+      - name: Install rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+      - name: Configure rclone
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONF_B64 }}" | base64 -d > ~/.config/rclone/rclone.conf
+          chmod 600 ~/.config/rclone/rclone.conf
+      - name: Download Polymarket BTC 5m data
+        run: |
+          mkdir -p ${{ env.PM_DIR }}
+          rclone copy gdrive:polybacktest_60d/polymarket/btc/5m/ ${{ env.PM_DIR }}/ \
+            --transfers 16 --checkers 32 --fast-list
+          echo "PM files: $(ls ${{ env.PM_DIR }}/*.json.gz 2>/dev/null | wc -l)"
+      - name: Generate Hyperliquid spot feed
+        run: |
+          python3 - <<'PY'
+          import csv, json, math, urllib.request
+          from datetime import datetime, timezone
+          start = datetime.fromisoformat("${{ env.WINDOW_START }}").timestamp()
+          end = datetime.fromisoformat("${{ env.WINDOW_END }}").timestamp()
+          body = json.dumps({
+              "type": "candleSnapshot",
+              "req": {
+                  "coin": "BTC",
+                  "interval": "1m",
+                  "startTime": int(start * 1000),
+                  "endTime": int(end * 1000) + 60_000,
+              }
+          }).encode()
+          req = urllib.request.Request(
+              "https://api.hyperliquid.xyz/info",
+              data=body,
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=60) as r:
+            rows = json.loads(r.read().decode())
+          with open("${{ env.HL_SPOT_CSV }}", "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["timestamp", "mid"])
+            for row in rows:
+              t_ms, o, c, h, l, v = row
+              dt = datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc).isoformat()
+              w.writerow([dt, float(c)])
+          print(f"Wrote {len(rows)} HL spot rows")
+          PY
+      - name: Generate Binance spot feed
+        run: |
+          python3 - <<'PY'
+          import csv, json, math, urllib.request
+          from datetime import datetime, timezone
+          start = datetime.fromisoformat("${{ env.WINDOW_START }}").timestamp()
+          end = datetime.fromisoformat("${{ env.WINDOW_END }}").timestamp()
+          start_ms, end_ms = int(start * 1000), int(end * 1000)
+          all_rows = []
+          limit = 1000
+          cursor = start_ms
+          while cursor <= end_ms:
+            url = (
+              f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT"
+              f"&interval=1m&startTime={cursor}&endTime={end_ms + 60_000}&limit={limit}"
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "orb-fade-backtest/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+              data = json.loads(r.read().decode())
+            if not data:
+              break
+            all_rows.extend(data)
+            cursor = int(data[-1][0]) + 60_000
+            if len(data) < limit:
+              break
+          with open("${{ env.BN_SPOT_CSV }}", "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["timestamp", "mid"])
+            for row in all_rows:
+              t_ms, o, h, l, c, v = row[:6]
+              dt = datetime.fromtimestamp(t_ms / 1000.0, tz=timezone.utc).isoformat()
+              w.writerow([dt, float(c)])
+          print(f"Wrote {len(all_rows)} Binance spot rows")
+          PY
+      - name: Cache PM data + spot feeds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PM_DIR }}
+            ${{ env.HL_SPOT_CSV }}
+            ${{ env.BN_SPOT_CSV }}
+          key: pm-btc-5m-spot-20260723-20260725-${{ github.run_id }}
+          restore-keys: |
+            pm-btc-5m-spot-20260723-20260725-
+
+  # ── Phase 2: Parallel backtest chunks ──────────────────────────────────────
+  backtest:
+    needs: setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Hyperliquid: 10 chunks x 2 caps = 20 jobs (matches Luxembourg live trader)
+          - {feed: hyperliquid, cap: 0.70, chunk: 0, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 1, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 2, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 3, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 4, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 5, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 6, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 7, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 8, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.70, chunk: 9, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 0, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 1, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 2, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 3, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 4, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 5, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 6, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 7, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 8, nchunks: 10}
+          - {feed: hyperliquid, cap: 0.85, chunk: 9, nchunks: 10}
+          # Binance: 5 chunks x 2 caps = 10 jobs for comparison
+          - {feed: binance, cap: 0.70, chunk: 0, nchunks: 5}
+          - {feed: binance, cap: 0.70, chunk: 1, nchunks: 5}
+          - {feed: binance, cap: 0.70, chunk: 2, nchunks: 5}
+          - {feed: binance, cap: 0.70, chunk: 3, nchunks: 5}
+          - {feed: binance, cap: 0.70, chunk: 4, nchunks: 5}
+          - {feed: binance, cap: 0.85, chunk: 0, nchunks: 5}
+          - {feed: binance, cap: 0.85, chunk: 1, nchunks: 5}
+          - {feed: binance, cap: 0.85, chunk: 2, nchunks: 5}
+          - {feed: binance, cap: 0.85, chunk: 3, nchunks: 5}
+          - {feed: binance, cap: 0.85, chunk: 4, nchunks: 5}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Restore PM data + spot feeds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.PM_DIR }}
+            ${{ env.HL_SPOT_CSV }}
+            ${{ env.BN_SPOT_CSV }}
+          key: pm-btc-5m-spot-20260723-20260725-${{ github.run_id }}
+          restore-keys: |
+            pm-btc-5m-spot-20260723-20260725-
+      - name: Run backtest chunk
+        run: |
+          SPOT_CSV="${{ env.HL_SPOT_CSV }}"
+          if [ "${{ matrix.feed }}" = "binance" ]; then
+            SPOT_CSV="${{ env.BN_SPOT_CSV }}"
+          fi
+          mkdir -p report
+          python3 backtest_orb_fade_2d.py \
+            --spot-feed ${{ matrix.feed }} \
+            --spot-csv "$SPOT_CSV" \
+            --pm-dir ${{ env.PM_DIR }} \
+            --report-dir report \
+            --start "${{ env.WINDOW_START }}" \
+            --end "${{ env.WINDOW_END }}" \
+            --cap ${{ matrix.cap }} \
+            --chunk ${{ matrix.chunk }} \
+            --nchunks ${{ matrix.nchunks }}
+          echo "=== Output files ==="
+          ls -la report/
+      - name: Upload per-chunk results
+        uses: actions/upload-artifact@v4
+        with:
+          name: trades-${{ matrix.feed }}-cap${{ matrix.cap }}-chunk${{ matrix.chunk }}
+          path: report/
+          retention-days: 3
+
+  # ── Phase 3: Combine per-chunk results ─────────────────────────────────────
+  combine:
+    needs: backtest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install pandas
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Combine trades and print summary
+        run: |
+          python3 - <<'PY'
+          import csv, glob, os, re
+          from collections import defaultdict
+          import pandas as pd
+
+          records = []
+          for root, dirs, files in os.walk("artifacts"):
+            m = re.search(r"trades-(hyperliquid|binance)-cap(\d+\.\d+)-chunk\d+", os.path.basename(root))
+            if not m:
+              continue
+            feed, cap = m.group(1), float(m.group(2))
+            for f in files:
+              if not f.endswith("_trades.csv"):
+                continue
+              path = os.path.join(root, f)
+              try:
+                df = pd.read_csv(path)
+              except Exception as e:
+                print(f"WARN: could not read {path}: {e}")
+                continue
+              if df.empty:
+                continue
+              df["feed"] = feed
+              df["cap"] = cap
+              records.append(df)
+
+          if not records:
+            print("No trades found.")
+            raise SystemExit(0)
+
+          all_df = pd.concat(records, ignore_index=True)
+          all_df["total_fee"] = all_df["entry_fee"] + all_df["exit_fee"]
+          summary = all_df.groupby(["feed", "cap"]).agg(
+            trades=("net_pnl", "size"),
+            gross_pnl=("gross_pnl", "sum"),
+            fees=("total_fee", "sum"),
+            net_pnl=("net_pnl", "sum"),
+            wins=("net_pnl", lambda s: (s > 0).sum()),
+            losses=("net_pnl", lambda s: (s <= 0).sum()),
+          ).reset_index()
+
+          print("\n=== ORB-fade 2-day sweep summary ===")
+          print(f"Total trades: {len(all_df)}")
+          print(summary.to_string(index=False))
+
+          all_df.to_csv("combined_trades.csv", index=False)
+          summary.to_csv("summary.csv", index=False)
+          PY
+      - name: Upload combined results
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-results
+          path: |
+            combined_trades.csv
+            summary.csv
+          retention-days: 7

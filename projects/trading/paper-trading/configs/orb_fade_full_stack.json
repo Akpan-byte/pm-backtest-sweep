@@ -1,0 +1,73 @@
+{
+  "name": "orb_fade_full_stack",
+  "capital": 244.54,
+  "snapshot_continuous_enabled": true,
+  "snapshot_continuous_interval_seconds": 5,
+  "snapshot_continuous_top_n": 5,
+  "snapshot_continuous_until_expiry": true,
+  "assets": [
+    "BTC"
+  ],
+  "legs": [
+    {
+      "leg_id": "b1m_liqpull40",
+      "or_window_seconds": 60,
+      "max_reentries": 5,
+      "filter": {
+        "feat": "PM_liq_pull20",
+        "op": "<",
+        "thr": 40
+      }
+    },
+    {
+      "leg_id": "b1m_imbslope30",
+      "or_window_seconds": 60,
+      "max_reentries": 5,
+      "filter": {
+        "feat": "PM_imb_slope20",
+        "op": "<",
+        "thr": 30
+      }
+    },
+    {
+      "leg_id": "b1m_chand40",
+      "or_window_seconds": 60,
+      "max_reentries": 5,
+      "filter": {
+        "feat": "IND_chand22_1d",
+        "op": ">",
+        "thr": 40
+      }
+    },
+    {
+      "leg_id": "l5m_mom30",
+      "or_window_seconds": 120,
+      "max_reentries": 5,
+      "filter": {
+        "feat": "IND_mom30_1d",
+        "op": "<",
+        "thr": 80
+      }
+    },
+    {
+      "leg_id": "l5m_liqpull60",
+      "or_window_seconds": 120,
+      "max_reentries": 5,
+      "filter": {
+        "feat": "PM_liq_pull20",
+        "op": "<",
+        "thr": 60
+      }
+    },
+    {
+      "leg_id": "l3m_bbpct40",
+      "or_window_seconds": 180,
+      "max_reentries": 5,
+      "filter": {
+        "feat": "IND_bbpct20_1d",
+        "op": ">",
+        "thr": 40
+      }
+    }
+  ]
+}
