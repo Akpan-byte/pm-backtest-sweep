@@ -6,8 +6,9 @@ env:
   PM_DIR: /tmp/pm_btc_5m
   HL_SPOT_CSV: /tmp/hl_spot_BTC.csv
   BN_SPOT_CSV: /tmp/bin_spot_btcusdt.csv
-  WINDOW_START: "2026-07-23T00:00:00+00:00"
-  WINDOW_END: "2026-07-25T23:59:59+00:00"
+  OUTCOMES_CACHE: /tmp/market_outcomes.json
+  WINDOW_START: "2026-08-08T00:00:00+00:00"
+  WINDOW_END: "2026-08-09T23:59:59+00:00"
 
 jobs:
   # ── Phase 1: Download PM data and build spot feeds ─────────────────────────
@@ -101,16 +102,25 @@ jobs:
               w.writerow([dt, float(c)])
           print(f"Wrote {len(all_rows)} Binance spot rows")
           PY
-      - name: Cache PM data + spot feeds
+      - name: Fetch resolved market outcomes (Chainlink TWAP settlement)
+        run: |
+          python3 backtest_orb_fade_2d.py \
+            --pm-dir ${{ env.PM_DIR }} \
+            --start "${{ env.WINDOW_START }}" \
+            --end "${{ env.WINDOW_END }}" \
+            --outcomes-cache ${{ env.OUTCOMES_CACHE }} \
+            --outcomes-only
+      - name: Cache PM data + spot feeds + outcomes
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.PM_DIR }}
             ${{ env.HL_SPOT_CSV }}
             ${{ env.BN_SPOT_CSV }}
-          key: pm-btc-5m-spot-20260723-20260725-${{ github.run_id }}
+            ${{ env.OUTCOMES_CACHE }}
+          key: pm-btc-5m-spot-outcomes-20260808-20260809-${{ github.run_id }}
           restore-keys: |
-            pm-btc-5m-spot-20260723-20260725-
+            pm-btc-5m-spot-outcomes-20260808-20260809-
 
   # ── Phase 2: Parallel backtest chunks ──────────────────────────────────────
   backtest:
@@ -158,16 +168,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Restore PM data + spot feeds
+      - name: Restore PM data + spot feeds + outcomes
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.PM_DIR }}
             ${{ env.HL_SPOT_CSV }}
             ${{ env.BN_SPOT_CSV }}
-          key: pm-btc-5m-spot-20260723-20260725-${{ github.run_id }}
+            ${{ env.OUTCOMES_CACHE }}
+          key: pm-btc-5m-spot-outcomes-20260808-20260809-${{ github.run_id }}
           restore-keys: |
-            pm-btc-5m-spot-20260723-20260725-
+            pm-btc-5m-spot-outcomes-20260808-20260809-
       - name: Run backtest chunk
         run: |
           SPOT_CSV="${{ env.HL_SPOT_CSV }}"
@@ -184,7 +195,8 @@ jobs:
             --end "${{ env.WINDOW_END }}" \
             --cap ${{ matrix.cap }} \
             --chunk ${{ matrix.chunk }} \
-            --nchunks ${{ matrix.nchunks }}
+            --nchunks ${{ matrix.nchunks }} \
+            --outcomes-cache ${{ env.OUTCOMES_CACHE }}
           echo "=== Output files ==="
           ls -la report/
       - name: Upload per-chunk results

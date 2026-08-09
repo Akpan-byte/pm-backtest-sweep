@@ -37,6 +37,7 @@ import sys
 import time
 import urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -244,6 +245,66 @@ def load_markets_in_window(window_start: datetime, window_end: datetime, pm_data
     return meta
 
 
+def fetch_market_outcomes(markets_meta, cache_path=None, max_workers=20):
+    """Query Polymarket CLOB API for the final resolved outcome of each market.
+
+    Returns a dict mapping condition_id -> 'YES' | 'NO' | None.
+    The CLOB result is the Chainlink TWAP-based settlement outcome, so using it
+    for expiry resolution makes the backtest match the live market resolution.
+    """
+    cids = sorted({m[0] for m in markets_meta})
+    if cache_path and os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as fh:
+                cached = json.load(fh)
+            if set(cids).issubset(set(cached.keys())):
+                print(f"Loaded outcomes for {len(cached)} markets from {cache_path}")
+                return cached
+        except Exception as exc:
+            print(f"WARN: could not load outcomes cache: {exc}")
+
+    outcomes = {}
+    lock = __import__("threading").Lock()
+
+    def _fetch(cid):
+        url = f"https://clob.polymarket.com/markets/{cid}"
+        req = urllib.request.Request(url, headers={"User-Agent": "orb-fade-backtest/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except Exception as exc:
+            print(f"WARN: outcome fetch failed for {cid}: {exc}")
+            return
+        tokens = data.get("tokens", [])
+        winner = None
+        for tok in tokens:
+            if tok.get("winner") is True:
+                outcome = tok.get("outcome", "").lower()
+                if outcome in ("up", "yes"):
+                    winner = "YES"
+                elif outcome in ("down", "no"):
+                    winner = "NO"
+                break
+        with lock:
+            outcomes[cid] = winner
+
+    print(f"Fetching outcomes for {len(cids)} markets from Polymarket CLOB ...")
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        list(ex.map(_fetch, cids))
+    found = sum(1 for v in outcomes.values() if v is not None)
+    print(f"  resolved {found}/{len(cids)} markets")
+
+    if cache_path:
+        try:
+            os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as fh:
+                json.dump(outcomes, fh)
+            print(f"  cached outcomes to {cache_path}")
+        except Exception as exc:
+            print(f"WARN: could not write outcomes cache: {exc}")
+    return outcomes
+
+
 def convert_book(pm_book):
     """Convert PM book dict-format to the signal module's tuple format."""
     if not pm_book:
@@ -399,6 +460,8 @@ def run_backtest(
     max_entry_price: float = None,
     chunk: int = None,
     nchunks: int = None,
+    outcomes_cache: str = None,
+    outcomes_only: bool = False,
 ):
     if max_entry_price is None:
         max_entry_price = MAX_ENTRY_PRICE
@@ -411,6 +474,27 @@ def run_backtest(
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
     legs_cfg = cfg["legs"]
+
+    # Discover PM markets first so we can fetch outcomes even without a spot feed
+    print(f"Discovering PM markets in {pm_data_dir} ...")
+    markets_meta = load_markets_in_window(window_start, window_end, pm_data_dir)
+    print(f"  {len(markets_meta)} markets in window")
+
+    # Fetch / cache resolved market outcomes (Chainlink TWAP settlement)
+    outcomes = fetch_market_outcomes(markets_meta, cache_path=outcomes_cache)
+    if outcomes_only:
+        print("Outcomes fetched; exiting.")
+        return None, None, []
+
+    # Optional worker chunking by sorted market index
+    if nchunks is not None and chunk is not None:
+        if nchunks <= 0:
+            raise ValueError("--nchunks must be > 0")
+        if not (0 <= chunk < nchunks):
+            raise ValueError(f"--chunk must be in [0, {nchunks})")
+        total_markets = len(markets_meta)
+        markets_meta = [m for i, m in enumerate(markets_meta) if i % nchunks == chunk]
+        print(f"  chunk {chunk}/{nchunks}: processing {len(markets_meta)} of {total_markets} markets")
 
     # Spot feed
     if spot_csv:
@@ -428,21 +512,6 @@ def run_backtest(
     if spot_ts is None:
         raise RuntimeError(f"Could not load spot feed from {spot_path}")
     print(f"  {len(spot_ts)} spot rows, {min(spot_ts)} to {max(spot_ts)}")
-
-    # Discover PM markets
-    print(f"Discovering PM markets in {pm_data_dir} ...")
-    markets_meta = load_markets_in_window(window_start, window_end, pm_data_dir)
-    print(f"  {len(markets_meta)} markets in window")
-
-    # Optional worker chunking by sorted market index
-    if nchunks is not None and chunk is not None:
-        if nchunks <= 0:
-            raise ValueError("--nchunks must be > 0")
-        if not (0 <= chunk < nchunks):
-            raise ValueError(f"--chunk must be in [0, {nchunks})")
-        total_markets = len(markets_meta)
-        markets_meta = [m for i, m in enumerate(markets_meta) if i % nchunks == chunk]
-        print(f"  chunk {chunk}/{nchunks}: processing {len(markets_meta)} of {total_markets} markets")
 
     # Setup isolated signal state
     os.makedirs(STATE_DIR, exist_ok=True)
@@ -547,11 +616,17 @@ def run_backtest(
                         exit_price = EXIT_SNIPE_PRICE
                         reason = "snipe_no_0.97"
                     elif rem_sec <= 0:
-                        if direction == "YES":
-                            exit_price = 1.0 if spot >= pos["entry_spot"] else 0.0
+                        winner = outcomes.get(cid)
+                        if winner is not None:
+                            exit_price = 1.0 if direction == winner else 0.0
+                            reason = "expiry_resolve_twap"
                         else:
-                            exit_price = 1.0 if spot < pos["entry_spot"] else 0.0
-                        reason = "expiry_resolve"
+                            # Fallback only if CLOB outcome is missing
+                            if direction == "YES":
+                                exit_price = 1.0 if spot >= pos["entry_spot"] else 0.0
+                            else:
+                                exit_price = 1.0 if spot < pos["entry_spot"] else 0.0
+                            reason = "expiry_resolve_spot_fallback"
 
                     if exit_price is not None:
                         gross_pnl = (exit_price - pos["entry_price"]) * pos["size"]
@@ -646,13 +721,19 @@ def run_backtest(
             if not pos_key[1] == cid:
                 continue
             direction = pos["direction"]
+            winner = outcomes.get(cid)
             spot = last_spot if last_spot is not None else spot_at(spot_ts, spot_prices, expiry_ts)
             if spot is None:
                 spot = pos["entry_spot"]
-            if direction == "YES":
-                exit_price = 1.0 if spot >= pos["entry_spot"] else 0.0
+            if winner is not None:
+                exit_price = 1.0 if direction == winner else 0.0
+                reason = "expiry_resolve_twap_end_of_data"
             else:
-                exit_price = 1.0 if spot < pos["entry_spot"] else 0.0
+                if direction == "YES":
+                    exit_price = 1.0 if spot >= pos["entry_spot"] else 0.0
+                else:
+                    exit_price = 1.0 if spot < pos["entry_spot"] else 0.0
+                reason = "expiry_resolve_spot_fallback_end_of_data"
             gross_pnl = (exit_price - pos["entry_price"]) * pos["size"]
             entry_fee = pos["entry_price"] * pos["size"] * FEE_PCT
             exit_fee = exit_price * pos["size"] * FEE_PCT
@@ -673,7 +754,7 @@ def run_backtest(
                     "entry_fee": entry_fee,
                     "exit_fee": exit_fee,
                     "net_pnl": net_pnl,
-                    "reason": "expiry_resolve_end_of_data",
+                    "reason": reason,
                 }
             )
             del positions[pos_key]
@@ -701,6 +782,8 @@ def main():
     ap.add_argument("--cap", type=float, default=MAX_ENTRY_PRICE, help="Max entry price cap")
     ap.add_argument("--chunk", type=int, default=None, help="Worker chunk index (0-based)")
     ap.add_argument("--nchunks", type=int, default=None, help="Total worker chunks")
+    ap.add_argument("--outcomes-cache", default=None, help="Path to cache fetched market outcomes")
+    ap.add_argument("--outcomes-only", action="store_true", help="Fetch/cache outcomes and exit")
     args = ap.parse_args()
 
     os.makedirs(args.report_dir, exist_ok=True)
@@ -715,8 +798,12 @@ def main():
         max_entry_price=args.cap,
         chunk=args.chunk,
         nchunks=args.nchunks,
+        outcomes_cache=args.outcomes_cache,
+        outcomes_only=args.outcomes_only,
     )
     elapsed = time.time() - t0
+    if per_leg is None and total is None:
+        return 0
 
     # Unique filename suffix including chunk and cap
     chunk_suffix = ""
@@ -782,6 +869,8 @@ def main():
         lines.append("- Binance spot feed.")
     if args.chunk is not None and args.nchunks is not None:
         lines.append(f"- Worker chunk {args.chunk} of {args.nchunks}.")
+    lines.append("- Expiry resolution uses the actual Polymarket/Chainlink TWAP outcome from the CLOB API.")
+    lines.append("  This matches live market settlement and is no longer derived from the spot snapshot.")
     lines.append("- PM-percentile seed copied from host pm_seed.json; vwapside gate seed is absent,")
     lines.append("  so gate flips may be sparse until enough trades accrue.")
     lines.append("- IND percentiles and vwapside gate are pinned to each snapshot's timestamp.")
