@@ -28,25 +28,30 @@ def resample_ohlcv(df_1min: pd.DataFrame, freq: str) -> pd.DataFrame:
     return resampled
 
 
-def backtest_clean_orb(df: pd.DataFrame, or_minutes: int, stop_mult: float,
+def backtest_clean_orb(df_or: pd.DataFrame, df_exec: pd.DataFrame, or_minutes: int, stop_mult: float,
                        session_start: str = "09:30", session_end: str = "16:00",
                        contract_value: float = 20.0) -> dict:
-    """Clean ORB: OR breakout, stop = OR range * stop_mult, target = close at session end."""
-    df = df.copy()
-    df.index = df.index.tz_localize("America/New_York") if df.index.tz is None else df.index.tz_convert("America/New_York")
-    df["date"] = df.index.date
-    df["time"] = df.index.time
+    """Clean ORB: OR built from df_or, breakout and stop execution checked on df_exec (e.g. 1min)."""
+    df_or = df_or.copy()
+    df_or.index = df_or.index.tz_localize("America/New_York") if df_or.index.tz is None else df_or.index.tz_convert("America/New_York")
+    df_or["date"] = df_or.index.date
+    df_or["time"] = df_or.index.time
+
+    df_exec = df_exec.copy()
+    df_exec.index = df_exec.index.tz_localize("America/New_York") if df_exec.index.tz is None else df_exec.index.tz_convert("America/New_York")
+    df_exec["date"] = df_exec.index.date
+    df_exec["time"] = df_exec.index.time
 
     daily_pnl = {}
     trades = []
 
-    for date, day_df in df.groupby("date"):
-        start_bar = day_df[day_df["time"] >= pd.Timestamp(session_start).time()]
+    for date, day_or in df_or.groupby("date"):
+        start_bar = day_or[day_or["time"] >= pd.Timestamp(session_start).time()]
         if start_bar.empty:
             continue
         start_idx = start_bar.index[0]
         or_end = start_idx + pd.Timedelta(minutes=or_minutes)
-        or_df = day_df[(day_df.index >= start_idx) & (day_df.index < or_end)]
+        or_df = day_or[(day_or.index >= start_idx) & (day_or.index < or_end)]
         if or_df.empty:
             continue
         or_high = or_df["high"].max()
@@ -55,12 +60,14 @@ def backtest_clean_orb(df: pd.DataFrame, or_minutes: int, stop_mult: float,
         if or_range <= 0:
             continue
 
-        trade_df = day_df[(day_df.index >= or_end) & (day_df["time"] < pd.Timestamp(session_end).time())]
-        if trade_df.empty:
+        # Execution bars for this day
+        day_exec = df_exec[df_exec["date"] == date]
+        trade_exec = day_exec[(day_exec.index >= or_end) & (day_exec["time"] < pd.Timestamp(session_end).time())]
+        if trade_exec.empty:
             continue
 
         entry = None
-        for ts, bar in trade_df.iterrows():
+        for ts, bar in trade_exec.iterrows():
             if bar["high"] >= or_high:
                 entry = (ts, 1, max(bar["open"], or_high))
                 break
@@ -73,9 +80,9 @@ def backtest_clean_orb(df: pd.DataFrame, or_minutes: int, stop_mult: float,
         ts, direction, entry_price = entry
         stop_price = entry_price - direction * or_range * stop_mult
 
-        exit_price = trade_df["close"].iloc[-1]
+        exit_price = trade_exec["close"].iloc[-1]
         exit_reason = "session_close"
-        for ts2, bar2 in trade_df.loc[ts:].iloc[1:].iterrows():
+        for ts2, bar2 in trade_exec.loc[ts:].iloc[1:].iterrows():
             if direction == 1:
                 if bar2["low"] <= stop_price:
                     exit_price = stop_price
@@ -192,7 +199,7 @@ def main():
     else:
         tf_minutes = {"1h": 60, "4h": 240}[args.or_tf]
         df_tf = resample_ohlcv(df_1min, args.or_tf)
-        result = backtest_clean_orb(df_tf, tf_minutes, args.stop_mult)
+        result = backtest_clean_orb(df_tf, df_1min, tf_minutes, args.stop_mult)
         daily_pnl = result["daily_pnl"]
         wins = sum(1 for t in result["trades"] if t["pnl_dollars"] > 0)
         total = sum(t["pnl_dollars"] for t in result["trades"])
