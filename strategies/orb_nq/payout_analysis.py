@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from data import load_ohlcv
 from orb_clean import backtest_orb_clean
 from orb_clean_dollar import backtest_orb_clean_dollar
+from prop_payout_sim import simulate_payouts
 
 
 def calculate_payouts(daily_pnl: dict, account_start: float, payout_rate: float = 0.40,
@@ -124,12 +125,30 @@ def main():
     payout_5day = calculate_payouts(daily_pnl, args.account_start, min_active_days=5)
     payout_3day = calculate_payouts(daily_pnl, args.account_start, min_active_days=3)
 
+    prop_sims = {}
+    for label, account_start, profit_target, daily_loss_limit in [
+        ("topstep_50k", 50000.0, 3000.0, 900.0),
+        ("topstep_150k", 150000.0, 10000.0, 3000.0),
+    ]:
+        prop_sims[label] = simulate_payouts(
+            daily_pnl,
+            account_start=account_start,
+            profit_target=profit_target,
+            daily_loss_limit=daily_loss_limit,
+            payout_rate=0.40,
+            min_active_days=5,
+            consistency_max_day_pct=0.50,
+            max_payout=profit_target * 0.40,
+        )
+
     out = {
         "name": args.name,
         "type": args.type,
         "metrics": metrics,
         "payout_5day_min": payout_5day,
         "payout_3day_min": payout_3day,
+        "prop_sims": prop_sims,
+        "daily_pnl": {str(k): float(v) for k, v in daily_pnl.items()},
     }
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
