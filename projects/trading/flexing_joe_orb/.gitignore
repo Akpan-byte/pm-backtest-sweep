@@ -1,0 +1,7 @@
+# GHA-friendly ignores: never commit venv, data, reports, caches.
+.venv/
+market_data/
+reports/
+__pycache__/
+.pytest_cache/
+*.pyc
