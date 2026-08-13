@@ -139,6 +139,7 @@ jobs:
             projects/trading/flexing_joe_orb/combined_main_counter_runner.py \
             --symbols NQ --contracts-per-trade 2 --variant reentries \
             --max-entries-per-day 3 --min-orb-range-multiple 0.7 \
+            --data-root "${{ github.workspace }}/market_data" \
             --workers 1 --prop-mc-runs 0 --prop-bootstrap-samples 0 \
             --output /tmp/fjo_parity_gha.json
           python3 - <<'PYEOF'
