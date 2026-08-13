@@ -145,7 +145,7 @@ jobs:
           python3 - <<'PYEOF'
           import json
           r = json.load(open("/tmp/fjo_parity_gha.json"))
-          m = r["metrics"]
+          m = r["NQ"]["metrics"]
           expected = {"n_trades": 3128, "net_pnl": 3098270.0}
           ok = (m.get("n_trades") == expected["n_trades"]
                 and abs(m.get("net_pnl", 0) - expected["net_pnl"]) < 1)
