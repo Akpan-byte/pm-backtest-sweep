@@ -189,7 +189,8 @@ jobs:
                   print(f"WARN: skip {p}: {e}")
                   continue
               for k, v in data.items():
-                  key = f"{k}_me{p.split('_me')[-1].split('.')[0]}"
+                  me = p.split("_me")[-1].split(".json")[0]
+                  key = f"{k}_me{me}"
                   merged[key] = v
 
           print(f"Collected {len(merged)} scenario summaries\n")
@@ -201,8 +202,8 @@ jobs:
               prop = v.get("prop", {})
               std = prop.get("standard", {}).get("payouts_per_month", "?")
               cons = prop.get("consistency", {}).get("payouts_per_month", "?")
-              rows.append([k, met["n_trades"], met["net_pnl"],
-                           100 * met["win_rate"], met["profit_factor"],
+              rows.append([k, met["total_trades"], met["net_pnl"],
+                           met["win_rate"], met["profit_factor"],
                            met["max_dd_dollars"], std, cons])
           for h in header:
               print(f"{h:>16}", end="")
