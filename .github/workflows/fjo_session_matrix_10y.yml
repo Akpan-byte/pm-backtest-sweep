@@ -146,11 +146,10 @@ jobs:
           import json
           r = json.load(open("/tmp/fjo_parity_gha.json"))
           m = r["NQ"]["metrics"]
-          expected = {"n_trades": 3128, "net_pnl": 3098270.0}
-          ok = (m.get("n_trades") == expected["n_trades"]
-                and abs(m.get("net_pnl", 0) - expected["net_pnl"]) < 1)
-          print("PARITY n_trades=%s net=%s -> %s" %
-                (m.get("n_trades"), m.get("net_pnl"), "PASS" if ok else "FAIL"))
+          ok = (m.get("total_trades") == 3128
+                and abs(m.get("net_pnl", 0) - 3098270.0) < 1)
+          print("PARITY total_trades=%s net=%s -> %s" %
+                (m.get("total_trades"), m.get("net_pnl"), "PASS" if ok else "FAIL"))
           if not ok:
               raise SystemExit(1)
           PYEOF
