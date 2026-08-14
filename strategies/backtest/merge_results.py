@@ -21,6 +21,7 @@ import os
 
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))
 sys.path.insert(0, os.environ.get("TOPSTEP_STRATS_DIR", "/config/topstep-strats"))
 from topstep_strats.backtest import run_backtest  # noqa: E402
 from topstep_strats.metrics import calculate_metrics  # noqa: E402

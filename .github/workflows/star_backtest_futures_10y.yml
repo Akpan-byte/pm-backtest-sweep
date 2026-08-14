@@ -7,9 +7,9 @@
 #   - Round-robin: worker w runs scenarios i where i % 20 == w.
 #   - Data: 10y 1min pulled from public Akpan-byte/fvg-backtest-engine
 #     (backtests/data/{NQ,ES,YM}/M1.csv.gz; ts header auto-detected).
-#   - Code: strategies/ from this repo; topstep_strats from its own repo
-#     (Akpan-byte/topstep-strats); pip installs scipy + scikit-learn for
-#     the metrics suite.
+#   - Code: strategies/ from this repo; topstep engine vendored at
+#     strategies/backtest/vendor/topstep_strats; pip installs scipy +
+#     scikit-learn for the metrics suite.
 #   - Merge job: downloads worker artifacts, merges 12 manifests, builds the
 #     4 instrument-combo reports by pooling symbol-tagged trades.
 # WHY: Run all 12 futures backtests in parallel instead of ~45+ min/run
@@ -33,12 +33,6 @@ jobs:
     steps:
       - name: Checkout strategy repo
         uses: actions/checkout@v4
-
-      - name: Checkout topstep engine repo
-        uses: actions/checkout@v4
-        with:
-          repository: Akpan-byte/topstep-strats
-          path: topstep_strats_repo
 
       - name: Checkout market data repo (10y 1min, 3 instruments)
         uses: actions/checkout@v4
@@ -70,7 +64,6 @@ jobs:
       - name: Run assigned scenarios
         env:
           WORKER_ID: ${{ matrix.worker_id }}
-          TOPSTEP_STRATS_DIR: ${{ github.workspace }}/topstep_strats_repo
         run: |
           set -euo pipefail
           mkdir -p results
@@ -117,12 +110,6 @@ jobs:
       - name: Checkout strategy repo
         uses: actions/checkout@v4
 
-      - name: Checkout topstep engine repo
-        uses: actions/checkout@v4
-        with:
-          repository: Akpan-byte/topstep-strats
-          path: topstep_strats_repo
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -138,8 +125,6 @@ jobs:
           merge-multiple: true
 
       - name: Build merged manifest + instrument combos
-        env:
-          TOPSTEP_STRATS_DIR: ${{ github.workspace }}/topstep_strats_repo
         run: |
           mkdir -p merged
           PYTHONPATH="${{ github.workspace }}" python3 \
