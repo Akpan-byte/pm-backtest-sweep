@@ -1,0 +1,155 @@
+# CHANGE_SUMMARY
+# 2026-08-14  coder
+#   - 20-worker parallel StarTrading futures backtest on GHA.
+#   - Scenarios: 4 strategies x 3 instruments (NQ/ES/YM) = 12 full in-sample
+#     runs (2016-06-01..2023-12-31) with the topstep engine + full metrics
+#     suite (20k MC + 20k bootstrap sims) and RTH/overnight split reports.
+#   - Round-robin: worker w runs scenarios i where i % 20 == w.
+#   - Data: 10y 1min pulled from public Akpan-byte/fvg-backtest-engine
+#     (backtests/data/{NQ,ES,YM}/M1.csv.gz; ts header auto-detected).
+#   - Code: strategies/ from this repo; topstep_strats from its own repo
+#     (Akpan-byte/topstep-strats); pip installs scipy + scikit-learn for
+#     the metrics suite.
+#   - Merge job: downloads worker artifacts, merges 12 manifests, builds the
+#     4 instrument-combo reports by pooling symbol-tagged trades.
+# WHY: Run all 12 futures backtests in parallel instead of ~45+ min/run
+#      sequentially on a closed laptop.
+name: star_backtest_futures_10y
+
+on:
+  workflow_dispatch:
+
+env:
+  TOTAL_WORKERS: '20'
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - name: Checkout topstep engine repo
+        uses: actions/checkout@v4
+        with:
+          repository: Akpan-byte/topstep-strats
+          path: topstep_strats_repo
+
+      - name: Checkout market data repo (10y 1min, 3 instruments)
+        uses: actions/checkout@v4
+        with:
+          repository: Akpan-byte/fvg-backtest-engine
+          path: fvg_execution_engine
+          sparse-checkout: |
+            backtests/data/NQ/M1.csv.gz
+            backtests/data/ES/M1.csv.gz
+            backtests/data/YM/M1.csv.gz
+          sparse-checkout-cone-mode: false
+
+      - name: Decompress market data
+        run: |
+          mkdir -p market_data
+          for SYM in NQ ES YM; do
+            gunzip -c fvg_execution_engine/backtests/data/$SYM/M1.csv.gz > market_data/${SYM}_1min.csv
+            head -1 market_data/${SYM}_1min.csv
+            wc -l market_data/${SYM}_1min.csv
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy scikit-learn
+
+      - name: Run assigned scenarios
+        env:
+          WORKER_ID: ${{ matrix.worker_id }}
+          TOPSTEP_STRATS_DIR: ${{ github.workspace }}/topstep_strats_repo
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          PYTHONPATH="${{ github.workspace }}" python3 - <<'PYEOF'
+          import os, subprocess, sys
+
+          STRATS = ["fifteen_min_range_scalp", "negative_rr_consolidation_sweeper",
+                    "mos_session_daily_draw", "post_8am_bpr_magnet"]
+          SYMBOLS = ["NQ", "ES", "YM"]
+          scenarios = [(s, sym) for s in STRATS for sym in SYMBOLS]
+
+          wid = int(os.environ["WORKER_ID"])
+          nwk = int(os.environ.get("TOTAL_WORKERS", "20"))
+          assigned = [sc for i, sc in enumerate(scenarios) if i % nwk == wid]
+          if not assigned:
+              print(f"Worker {wid}: nothing to do"); sys.exit(0)
+          print(f"Worker {wid}: {len(assigned)} scenarios -> {assigned}")
+
+          for strategy, symbol in assigned:
+              cmd = ["python3", "strategies/backtest/run_backtest.py",
+                     "--strategy", strategy, "--symbol", symbol,
+                     "--csv", f"market_data/{symbol}_1min.csv",
+                     "--start", "2016-06-01", "--end", "2023-12-31",
+                     "--outdir", "results", "--n-mc", "20000", "--n-boot", "20000",
+                     "--pip-value", "1.0", "--scratch", "scratch"]
+              print(f"  RUN: {' '.join(cmd)}")
+              subprocess.run(cmd, check=True)
+          print(f"Worker {wid} done.")
+          PYEOF
+
+      - name: Upload worker results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-worker-${{ matrix.worker_id }}
+          path: results/
+          retention-days: 30
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: compute
+    timeout-minutes: 30
+    steps:
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - name: Checkout topstep engine repo
+        uses: actions/checkout@v4
+        with:
+          repository: Akpan-byte/topstep-strats
+          path: topstep_strats_repo
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy scikit-learn
+
+      - name: Download all worker results
+        uses: actions/download-artifact@v4
+        with:
+          path: all_results/
+          pattern: "star-worker-*"
+          merge-multiple: true
+
+      - name: Build merged manifest + instrument combos
+        env:
+          TOPSTEP_STRATS_DIR: ${{ github.workspace }}/topstep_strats_repo
+        run: |
+          mkdir -p merged
+          PYTHONPATH="${{ github.workspace }}" python3 \
+            strategies/backtest/merge_results.py \
+            --results all_results --outdir merged \
+            --n-mc 20000 --n-boot 20000
+
+      - name: Upload merged report
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-backtest-futures-10y-report
+          path: merged/
+          retention-days: 30
