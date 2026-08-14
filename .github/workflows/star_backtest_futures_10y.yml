@@ -130,7 +130,7 @@ jobs:
           PYTHONPATH="${{ github.workspace }}" python3 \
             strategies/backtest/merge_results.py \
             --results all_results --outdir merged \
-            --n-mc 20000 --n-boot 20000
+            --n-mc 2000 --n-boot 2000
 
       - name: Upload merged report
         uses: actions/upload-artifact@v4
