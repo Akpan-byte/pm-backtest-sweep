@@ -3,6 +3,10 @@ __pycache__/
 *.pyo
 results/
 *.log
+# strategy signal StateStore scratch dirs (engine isolates to /tmp per run)
+strategies/state/
+strategies/**/state/
+strategies/*/state/
 # execution_kernel is a standalone repo upstreamed to Akpan-byte/execution-kernel
 projects/trading/live-bots/execution_kernel/
 !/backtest/quant_fast.py
