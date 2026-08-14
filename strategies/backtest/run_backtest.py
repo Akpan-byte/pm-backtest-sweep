@@ -63,7 +63,10 @@ def save_result(outdir: Path, tag: str, trades: list[dict], metrics: dict):
     outdir.mkdir(parents=True, exist_ok=True)
     trades_path = outdir / f"{tag}_trades.csv"
     metrics_path = outdir / f"{tag}_metrics.json"
-    pd.DataFrame(trades).to_csv(trades_path, index=False)
+    if trades:
+        pd.DataFrame(trades).to_csv(trades_path, index=False)
+    else:
+        trades_path.write_text("")
     with open(metrics_path, "w") as fh:
         json.dump(metrics, fh, indent=2, default=str)
     return trades_path, metrics_path
