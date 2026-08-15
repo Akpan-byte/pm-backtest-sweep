@@ -1,0 +1,67 @@
+name: Mos Strategy Instrument Combos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        instruments: ['NQ', 'ES', 'YM', 'NQ,ES', 'NQ,YM', 'ES,YM', 'NQ,ES,YM']
+        dll: ['none', '300']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install numpy pandas scipy scikit-learn
+          sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Download market data
+        run: |
+          mkdir -p /tmp/data
+          gh release download fvg-data-v1 --pattern "*.csv.zst" --dir /tmp/data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decompress data
+        run: |
+          cd /tmp/data
+          for f in *.csv.zst; do zstd -d "$f"; done
+
+      - name: Run backtest
+        run: |
+          INST="${{ matrix.instruments }}"
+          INST_TAG="${INST//,/_}"
+          DLL="${{ matrix.dll }}"
+          TAG="mos_${INST_TAG}_dll_${DLL}"
+          
+          DLL_ARG=""
+          if [ "$DLL" != "none" ]; then
+            DLL_ARG="--dll $DLL"
+          fi
+          
+          python strategies/backtest/run_portfolio.py \
+            --strategy mos_session_daily_draw \
+            --instruments "$INST" \
+            $DLL_ARG \
+            --n-mc 2000 --n-boot 2000 \
+            --data-root /tmp/data \
+            --tag "$TAG" \
+            --outdir /tmp/results
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: mos_${{ matrix.instruments != 'NQ,ES,YM' && matrix.instruments || 'all' }}_dll_${{ matrix.dll }}
+          path: /tmp/results/mos_*/
+          retention-days: 30

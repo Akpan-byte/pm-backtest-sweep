@@ -87,17 +87,29 @@ def main():
     ap.add_argument("--data-root", default="/tmp/opencode/fvg-market-data")
     ap.add_argument("--outdir", default="/tmp/opencode/star_portfolio")
     ap.add_argument("--tag", default=None)
+    ap.add_argument("--strategy", default=None,
+                    help="Single strategy (e.g. mos_session_daily_draw); omit for winners book")
+    ap.add_argument("--instruments", default=None,
+                    help="Comma-separated instrument list (e.g. NQ,ES); omit for all three")
     args = ap.parse_args()
 
+    instruments = [s.strip().upper() for s in args.instruments.split(",")] if args.instruments else ["NQ", "ES", "YM"]
     data_root = Path(args.data_root)
     data = {}
-    for sym in ["NQ", "ES", "YM"]:
+    for sym in instruments:
         df = load_1m_fast(data_root / f"{sym}_1min.csv")
         data[sym] = df.loc[args.start:args.end]
+
+    if args.strategy:
+        combos = [(args.strategy, sym) for sym in instruments]
+    else:
+        from strategies.backtest.portfolio_harness import WINNERS_COMBOS
+        combos = [(s, sym) for s, sym in WINNERS_COMBOS if sym in instruments]
 
     t0 = time.time()
     ph = PortfolioHarness(
         data=data,
+        combos=combos,
         dll=args.dll,
         risk_pct=args.risk_pct,
         initial_capital=args.initial_capital,
