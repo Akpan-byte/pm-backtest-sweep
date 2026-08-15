@@ -1,0 +1,77 @@
+name: Portfolio DLL Sweep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dll: [none, '50', '75', '100', '125', '150', '175', '200', '225', '250', '275', '300', '325', '350', '375', '400', '425', '450', '475', '500', '525', '550', '575', '600', '625', '650', '675', '700']
+        risk: ['']
+        include:
+          - dll: '300'
+            risk: '0.005'
+          - dll: '300'
+            risk: '0.01'
+          - dll: 'none'
+            risk: '0.005'
+          - dll: 'none'
+            risk: '0.01'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy
+
+      - name: Download market data
+        run: |
+          mkdir -p /tmp/data
+          gh release download fvg-data-v1 --pattern "*.csv.zst" --dir /tmp/data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decompress data
+        run: |
+          cd /tmp/data
+          for f in *.csv.zst; do zstd -d "$f"; done
+
+      - name: Run portfolio sweep
+        run: |
+          TAG="portfolio_dll_${{ matrix.dll }}"
+          if [ -n "${{ matrix.risk }}" ]; then
+            TAG="${TAG}_risk_${{ matrix.risk }}"
+          fi
+          
+          DLL_ARG=""
+          if [ "${{ matrix.dll }}" != "none" ]; then
+            DLL_ARG="--dll ${{ matrix.dll }}"
+          fi
+          
+          RISK_ARG=""
+          if [ -n "${{ matrix.risk }}" ]; then
+            RISK_ARG="--risk-pct ${{ matrix.risk }}"
+          fi
+          
+          python strategies/backtest/run_portfolio.py \
+            $DLL_ARG $RISK_ARG \
+            --n-mc 2000 --n-boot 2000 \
+            --data-root /tmp/data \
+            --tag "$TAG" \
+            --outdir /tmp/results
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolio_dll_${{ matrix.dll }}${{ matrix.risk != '' && format('_risk_{0}', matrix.risk) || '' }}
+          path: /tmp/results/portfolio_dll_*/
+          retention-days: 30
