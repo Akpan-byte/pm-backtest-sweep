@@ -168,6 +168,7 @@ class StrategyHarness:
         risk_pct: float | None = None,
         initial_capital: float = 100_000.0,
         max_drawdown: float | None = None,
+        eod_drawdown: float | None = None,
         ledger: dict | None = None,
     ):
         if strategy not in self.SIGNALS:
