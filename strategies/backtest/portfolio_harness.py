@@ -68,6 +68,8 @@ class PortfolioHarness:
         dll: float | None = None,
         risk_pct: float | None = None,
         initial_capital: float = 100_000.0,
+        max_drawdown: float | None = None,
+        eod_drawdown: float | None = None,
         scratch_root: Path | None = None,
     ):
         combos = combos or WINNERS_COMBOS
@@ -95,6 +97,8 @@ class PortfolioHarness:
                 dll=dll,
                 risk_pct=risk_pct,
                 initial_capital=initial_capital,
+                max_drawdown=max_drawdown,
+                eod_drawdown=eod_drawdown,
                 ledger=self.ledger,
             )
             self.harnesses.append(h)

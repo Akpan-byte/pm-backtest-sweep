@@ -80,6 +80,8 @@ def main():
     ap.add_argument("--dll", type=float, default=None)
     ap.add_argument("--risk-pct", type=float, default=None)
     ap.add_argument("--initial-capital", type=float, default=100_000.0)
+    ap.add_argument("--max-drawdown", type=float, default=None)
+    ap.add_argument("--eod-drawdown", type=float, default=None)
     ap.add_argument("--n-mc", type=int, default=2000)
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--start", default="2016-06-01")
@@ -113,6 +115,8 @@ def main():
         dll=args.dll,
         risk_pct=args.risk_pct,
         initial_capital=args.initial_capital,
+        max_drawdown=args.max_drawdown,
+        eod_drawdown=args.eod_drawdown,
         scratch_root=Path(tempfile.mkdtemp(prefix="portfolio_run_")),
     )
     trades = ph.run()
@@ -157,6 +161,8 @@ def main():
         "dll": args.dll,
         "risk_pct": args.risk_pct,
         "initial_capital": args.initial_capital,
+        "max_drawdown": args.max_drawdown,
+        "eod_drawdown": args.eod_drawdown,
         "start": args.start,
         "end": args.end,
         "n_trades": len(trades),

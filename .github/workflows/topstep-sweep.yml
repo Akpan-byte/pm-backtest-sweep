@@ -1,0 +1,93 @@
+name: Topstep Account Sweep
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # === 50k ACCOUNTS ===
+          # NQ only
+          - { account: "50k", instruments: "NQ", risk_pct: "0.005", dll: "1000", eod_dd: "2000", tag: "50k_NQ_0.5pct" }
+          - { account: "50k", instruments: "NQ", risk_pct: "0.01", dll: "1000", eod_dd: "2000", tag: "50k_NQ_1pct" }
+          - { account: "50k", instruments: "NQ", risk_pct: "0.02", dll: "1000", eod_dd: "2000", tag: "50k_NQ_2pct" }
+          # NQ+YM
+          - { account: "50k", instruments: "NQ,YM", risk_pct: "0.005", dll: "1000", eod_dd: "2000", tag: "50k_NQYM_0.5pct" }
+          - { account: "50k", instruments: "NQ,YM", risk_pct: "0.01", dll: "1000", eod_dd: "2000", tag: "50k_NQYM_1pct" }
+          - { account: "50k", instruments: "NQ,YM", risk_pct: "0.02", dll: "1000", eod_dd: "2000", tag: "50k_NQYM_2pct" }
+          # NQ+ES
+          - { account: "50k", instruments: "NQ,ES", risk_pct: "0.005", dll: "1000", eod_dd: "2000", tag: "50k_NQES_0.5pct" }
+          - { account: "50k", instruments: "NQ,ES", risk_pct: "0.01", dll: "1000", eod_dd: "2000", tag: "50k_NQES_1pct" }
+          # All three
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: "0.005", dll: "1000", eod_dd: "2000", tag: "50k_all_0.5pct" }
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: "0.01", dll: "1000", eod_dd: "2000", tag: "50k_all_1pct" }
+
+          # === 150k ACCOUNTS ===
+          # NQ only
+          - { account: "150k", instruments: "NQ", risk_pct: "0.005", dll: "4500", eod_dd: "5000", tag: "150k_NQ_0.5pct" }
+          - { account: "150k", instruments: "NQ", risk_pct: "0.01", dll: "4500", eod_dd: "5000", tag: "150k_NQ_1pct" }
+          - { account: "150k", instruments: "NQ", risk_pct: "0.02", dll: "4500", eod_dd: "5000", tag: "150k_NQ_2pct" }
+          # NQ+YM
+          - { account: "150k", instruments: "NQ,YM", risk_pct: "0.005", dll: "4500", eod_dd: "5000", tag: "150k_NQYM_0.5pct" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: "0.01", dll: "4500", eod_dd: "5000", tag: "150k_NQYM_1pct" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: "0.02", dll: "4500", eod_dd: "5000", tag: "150k_NQYM_2pct" }
+          # NQ+ES
+          - { account: "150k", instruments: "NQ,ES", risk_pct: "0.005", dll: "4500", eod_dd: "5000", tag: "150k_NQES_0.5pct" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: "0.01", dll: "4500", eod_dd: "5000", tag: "150k_NQES_1pct" }
+          # All three
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: "0.005", dll: "4500", eod_dd: "5000", tag: "150k_all_0.5pct" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: "0.01", dll: "4500", eod_dd: "5000", tag: "150k_all_1pct" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: "0.02", dll: "4500", eod_dd: "5000", tag: "150k_all_2pct" }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install numpy pandas scipy scikit-learn
+          sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Download market data
+        run: |
+          mkdir -p /tmp/data
+          gh release download fvg-data-v1 --pattern "*.csv.zst" --dir /tmp/data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decompress data
+        run: |
+          cd /tmp/data
+          for f in *.csv.zst; do zstd -d "$f"; done
+
+      - name: Run backtest
+        run: |
+          TAG="${{ matrix.tag }}"
+          
+          python strategies/backtest/run_portfolio.py \
+            --strategy mos_session_daily_draw \
+            --instruments "${{ matrix.instruments }}" \
+            --dll ${{ matrix.dll }} \
+            --eod-drawdown ${{ matrix.eod_dd }} \
+            --risk-pct ${{ matrix.risk_pct }} \
+            --initial-capital ${{ matrix.account == '50k' && '50000' || '150000' }} \
+            --n-mc 2000 --n-boot 2000 \
+            --data-root /tmp/data \
+            --tag "$TAG" \
+            --outdir /tmp/results
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.tag }}
+          path: /tmp/results/${{ matrix.tag }}/
+          retention-days: 30

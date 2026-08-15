@@ -16,6 +16,7 @@ import argparse
 import json
 import logging
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -105,6 +106,11 @@ def run_one(
     pip_value: float,
     max_reentries: int | None,
     scratch_root: Path,
+    dll: float | None = None,
+    risk_pct: float | None = None,
+    initial_capital: float = 100_000.0,
+    max_drawdown: float | None = None,
+    eod_drawdown: float | None = None,
 ) -> dict:
     point_value = POINT_VALUES[symbol.upper()]
     df = load_1m(csv, start, end)
@@ -116,6 +122,11 @@ def run_one(
         pip_value=pip_value,
         max_reentries=max_reentries,
         scratch_root=scratch_root,
+        dll=dll,
+        risk_pct=risk_pct,
+        initial_capital=initial_capital,
+        max_drawdown=max_drawdown,
+        eod_drawdown=eod_drawdown,
     )
     trades = harness.run(df)
     log.info("%s %s: %d trades in %.1fs", strategy, symbol, len(trades), time.time() - t0)
@@ -187,7 +198,17 @@ def main():
     ap.add_argument("--n-boot", type=int, default=20000)
     ap.add_argument("--pip-value", type=float, default=1.0)
     ap.add_argument("--max-reentries", type=int, default=None)
-    ap.add_argument("--scratch", default="/tmp/strategies_state", help="signal state isolation root")
+    ap.add_argument("--dll", type=float, default=None, help="daily loss limit in $ (hard mid-trade cut, then halt for the day)")
+    ap.add_argument("--risk-pct", type=float, default=None, help="fixed-fractional risk per trade (qty from stop distance); None=1 contract")
+    ap.add_argument("--initial-capital", type=float, default=100_000.0)
+    ap.add_argument("--max-drawdown", type=float, default=None, help="intra-day trailing drawdown limit in $ (Apex/E2T style)")
+    ap.add_argument("--eod-drawdown", type=float, default=None, help="end-of-day trailing drawdown limit in $ (Topstep style)")
+    ap.add_argument(
+        "--scratch",
+        default=tempfile.mkdtemp(prefix="strategies_run_"),
+        help="signal state isolation root (default: fresh temp dir per run, so no stale"
+        " date-keyed state leaks between runs and alters entries)",
+    )
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -200,6 +221,8 @@ def main():
         res = run_one(
             strategy, args.symbol, args.csv, args.start, args.end, outdir,
             args.n_mc, args.n_boot, args.pip_value, args.max_reentries, scratch,
+            dll=args.dll, risk_pct=args.risk_pct, initial_capital=args.initial_capital,
+            max_drawdown=args.max_drawdown, eod_drawdown=args.eod_drawdown,
         )
         manifest.append(res)
         print(f"[{res['symbol']}/{res['strategy']}] trades={res['n_trades']} "

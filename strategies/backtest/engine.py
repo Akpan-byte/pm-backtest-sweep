@@ -167,6 +167,7 @@ class StrategyHarness:
         dll: float | None = None,
         risk_pct: float | None = None,
         initial_capital: float = 100_000.0,
+        max_drawdown: float | None = None,
         ledger: dict | None = None,
     ):
         if strategy not in self.SIGNALS:
@@ -191,6 +192,16 @@ class StrategyHarness:
             self.ledger["dll"] = self.dll
         self.risk_pct = risk_pct
         self.initial_capital = initial_capital
+        # max_drawdown: intra-day trailing drawdown (peak-to-trough in equity).
+        # Halt if equity drops this far from peak at any point. For firms like
+        # Apex / Earn2Trade that enforce intra-day trailing DD.
+        self.max_drawdown = max_drawdown
+        # eod_drawdown: end-of-day trailing drawdown.  Halt if the close-of-day
+        # equity is this far below the all-time equity peak.  For Topstep-style
+        # rules where intra-day excursion is allowed as long as you recover by EOD.
+        self.eod_drawdown = eod_drawdown
+        self._peak_equity = initial_capital
+        self._eod_peak_equity = initial_capital
         self._day_realized = 0.0
         self._day_key: datetime | None = None
         self._day_halted = False
@@ -390,6 +401,11 @@ class StrategyHarness:
             reason = "DLL"
         self._set_realized_day(day_before + pnl_dollars)
         self._equity += pnl_dollars
+        # Intra-day trailing drawdown: halt if equity drops max_drawdown from peak.
+        if self.max_drawdown is not None and self._equity > self._peak_equity:
+            self._peak_equity = self._equity
+        if self.max_drawdown is not None and self._peak_equity - self._equity >= self.max_drawdown:
+            self._set_halted(True)
         if self.dll and self._realized_day() <= -self.dll:
             self._set_halted(True)
         self.trades.append({
@@ -487,13 +503,33 @@ class StrategyHarness:
             day_key = bar["timestamp"].date()
             if self._ledger:
                 if day_key != self.ledger.get("day"):
+                    # EOD drawdown check: halt if equity is below peak - eod_drawdown.
+                    if self.eod_drawdown is not None and self._peak_equity - self._equity >= self.eod_drawdown:
+                        self._set_halted(True)
+                    if self._equity > self._peak_equity:
+                        self._peak_equity = self._equity
                     self.ledger["day"] = day_key
                     self.ledger["day_realized"] = 0.0
                     self.ledger["day_halted"] = False
             elif day_key != self._day_key:
+                # EOD drawdown check
+                if self.eod_drawdown is not None and self._peak_equity - self._equity >= self.eod_drawdown:
+                    self._set_halted(True)
+                if self._equity > self._peak_equity:
+                    self._peak_equity = self._equity
                 self._day_key = day_key
                 self._day_realized = 0.0
                 self._day_halted = False
+
+        # EOD drawdown check when no DLL (standalone EOD DD mode).
+        elif self.eod_drawdown is not None:
+            day_key = bar["timestamp"].date()
+            if day_key != self._day_key:
+                if self._peak_equity - self._equity >= self.eod_drawdown:
+                    self._set_halted(True)
+                if self._equity > self._peak_equity:
+                    self._peak_equity = self._equity
+                self._day_key = day_key
 
         # Close existing position (SL/TP/DLL/hard-exit) before evaluating
         # a new entry on the same bar.
