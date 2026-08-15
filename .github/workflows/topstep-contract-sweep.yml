@@ -1,0 +1,154 @@
+name: Topstep Contract Sweep
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ===== 50k configs =====
+          # NQ, 1c
+          - { account: "50k", instruments: "NQ", risk_pct: 0.005, max_contracts: 1, tag: "50k_NQ_r0.5_1c" }
+          - { account: "50k", instruments: "NQ", risk_pct: 0.01, max_contracts: 1, tag: "50k_NQ_r1_1c" }
+          - { account: "50k", instruments: "NQ", risk_pct: 0.02, max_contracts: 1, tag: "50k_NQ_r2_1c" }
+          # NQ, 2c
+          - { account: "50k", instruments: "NQ", risk_pct: 0.005, max_contracts: 2, tag: "50k_NQ_r0.5_2c" }
+          - { account: "50k", instruments: "NQ", risk_pct: 0.01, max_contracts: 2, tag: "50k_NQ_r1_2c" }
+          - { account: "50k", instruments: "NQ", risk_pct: 0.02, max_contracts: 2, tag: "50k_NQ_r2_2c" }
+          # NQ+YM, 1c
+          - { account: "50k", instruments: "NQ,YM", risk_pct: 0.005, max_contracts: 1, tag: "50k_NQYM_r0.5_1c" }
+          - { account: "50k", instruments: "NQ,YM", risk_pct: 0.01, max_contracts: 1, tag: "50k_NQYM_r1_1c" }
+          - { account: "50k", instruments: "NQ,YM", risk_pct: 0.02, max_contracts: 1, tag: "50k_NQYM_r2_1c" }
+          # NQ+YM, 2c
+          - { account: "50k", instruments: "NQ,YM", risk_pct: 0.005, max_contracts: 2, tag: "50k_NQYM_r0.5_2c" }
+          - { account: "50k", instruments: "NQ,YM", risk_pct: 0.01, max_contracts: 2, tag: "50k_NQYM_r1_2c" }
+          - { account: "50k", instruments: "NQ,YM", risk_pct: 0.02, max_contracts: 2, tag: "50k_NQYM_r2_2c" }
+          # NQ+ES, 1c
+          - { account: "50k", instruments: "NQ,ES", risk_pct: 0.005, max_contracts: 1, tag: "50k_NQES_r0.5_1c" }
+          - { account: "50k", instruments: "NQ,ES", risk_pct: 0.01, max_contracts: 1, tag: "50k_NQES_r1_1c" }
+          - { account: "50k", instruments: "NQ,ES", risk_pct: 0.02, max_contracts: 1, tag: "50k_NQES_r2_1c" }
+          # NQ+ES, 2c
+          - { account: "50k", instruments: "NQ,ES", risk_pct: 0.005, max_contracts: 2, tag: "50k_NQES_r0.5_2c" }
+          - { account: "50k", instruments: "NQ,ES", risk_pct: 0.01, max_contracts: 2, tag: "50k_NQES_r1_2c" }
+          - { account: "50k", instruments: "NQ,ES", risk_pct: 0.02, max_contracts: 2, tag: "50k_NQES_r2_2c" }
+          # All three, 1c
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: 0.005, max_contracts: 1, tag: "50k_all_r0.5_1c" }
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: 0.01, max_contracts: 1, tag: "50k_all_r1_1c" }
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: 0.02, max_contracts: 1, tag: "50k_all_r2_1c" }
+          # All three, 2c
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: 0.005, max_contracts: 2, tag: "50k_all_r0.5_2c" }
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: 0.01, max_contracts: 2, tag: "50k_all_r1_2c" }
+          - { account: "50k", instruments: "NQ,ES,YM", risk_pct: 0.02, max_contracts: 2, tag: "50k_all_r2_2c" }
+
+          # ===== 150k configs =====
+          # NQ, 1c
+          - { account: "150k", instruments: "NQ", risk_pct: 0.005, max_contracts: 1, tag: "150k_NQ_r0.5_1c" }
+          - { account: "150k", instruments: "NQ", risk_pct: 0.01, max_contracts: 1, tag: "150k_NQ_r1_1c" }
+          - { account: "150k", instruments: "NQ", risk_pct: 0.02, max_contracts: 1, tag: "150k_NQ_r2_1c" }
+          # NQ, 2c
+          - { account: "150k", instruments: "NQ", risk_pct: 0.005, max_contracts: 2, tag: "150k_NQ_r0.5_2c" }
+          - { account: "150k", instruments: "NQ", risk_pct: 0.01, max_contracts: 2, tag: "150k_NQ_r1_2c" }
+          - { account: "150k", instruments: "NQ", risk_pct: 0.02, max_contracts: 2, tag: "150k_NQ_r2_2c" }
+          # NQ, 3c
+          - { account: "150k", instruments: "NQ", risk_pct: 0.005, max_contracts: 3, tag: "150k_NQ_r0.5_3c" }
+          - { account: "150k", instruments: "NQ", risk_pct: 0.01, max_contracts: 3, tag: "150k_NQ_r1_3c" }
+          - { account: "150k", instruments: "NQ", risk_pct: 0.02, max_contracts: 3, tag: "150k_NQ_r2_3c" }
+          # NQ+YM, 1c
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.005, max_contracts: 1, tag: "150k_NQYM_r0.5_1c" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.01, max_contracts: 1, tag: "150k_NQYM_r1_1c" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.02, max_contracts: 1, tag: "150k_NQYM_r2_1c" }
+          # NQ+YM, 2c
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.005, max_contracts: 2, tag: "150k_NQYM_r0.5_2c" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.01, max_contracts: 2, tag: "150k_NQYM_r1_2c" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.02, max_contracts: 2, tag: "150k_NQYM_r2_2c" }
+          # NQ+YM, 3c
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.005, max_contracts: 3, tag: "150k_NQYM_r0.5_3c" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.01, max_contracts: 3, tag: "150k_NQYM_r1_3c" }
+          - { account: "150k", instruments: "NQ,YM", risk_pct: 0.02, max_contracts: 3, tag: "150k_NQYM_r2_3c" }
+          # NQ+ES, 1c
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.005, max_contracts: 1, tag: "150k_NQES_r0.5_1c" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.01, max_contracts: 1, tag: "150k_NQES_r1_1c" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.02, max_contracts: 1, tag: "150k_NQES_r2_1c" }
+          # NQ+ES, 2c
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.005, max_contracts: 2, tag: "150k_NQES_r0.5_2c" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.01, max_contracts: 2, tag: "150k_NQES_r1_2c" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.02, max_contracts: 2, tag: "150k_NQES_r2_2c" }
+          # NQ+ES, 3c
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.005, max_contracts: 3, tag: "150k_NQES_r0.5_3c" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.01, max_contracts: 3, tag: "150k_NQES_r1_3c" }
+          - { account: "150k", instruments: "NQ,ES", risk_pct: 0.02, max_contracts: 3, tag: "150k_NQES_r2_3c" }
+          # All three, 1c
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.005, max_contracts: 1, tag: "150k_all_r0.5_1c" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.01, max_contracts: 1, tag: "150k_all_r1_1c" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.02, max_contracts: 1, tag: "150k_all_r2_1c" }
+          # All three, 2c
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.005, max_contracts: 2, tag: "150k_all_r0.5_2c" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.01, max_contracts: 2, tag: "150k_all_r1_2c" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.02, max_contracts: 2, tag: "150k_all_r2_2c" }
+          # All three, 3c
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.005, max_contracts: 3, tag: "150k_all_r0.5_3c" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.01, max_contracts: 3, tag: "150k_all_r1_3c" }
+          - { account: "150k", instruments: "NQ,ES,YM", risk_pct: 0.02, max_contracts: 3, tag: "150k_all_r2_3c" }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install pandas numpy scikit-learn pyarrow
+
+      - name: Download market data
+        run: |
+          gh release download fvg-data-v1 \
+            -R ${{ github.repository }} \
+            -p "fvg-market-data.tar.zst" \
+            -D /tmp
+          zstd -d /tmp/fvg-market-data.tar.zst -o /tmp/fvg-market-data.tar
+          tar xf /tmp/fvg-market-data.tar -C /tmp
+        env:
+          GH_TOKEN: ${{ github.TOKEN }}
+
+      - name: Run backtest
+        run: |
+          if [ "${{ matrix.account }}" = "50k" ]; then
+            DLL=1000; EOD_DD=2000; IC=50000
+          else
+            DLL=4500; EOD_DD=5000; IC=150000
+          fi
+
+          mkdir -p /tmp/topstep_contract_sweep/${{ matrix.tag }}
+
+          python strategies/backtest/run_portfolio.py \
+            --dll $DLL \
+            --risk-pct ${{ matrix.risk_pct }} \
+            --initial-capital $IC \
+            --eod-drawdown $EOD_DD \
+            --max-contracts ${{ matrix.max_contracts }} \
+            --n-mc 20000 \
+            --n-boot 20000 \
+            --instruments "${{ matrix.instruments }}" \
+            --tag "${{ matrix.tag }}" \
+            --outdir /tmp/topstep_contract_sweep
+        env:
+          PYTHONPATH: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.tag }}-report
+          path: /tmp/topstep_contract_sweep/${{ matrix.tag }}/report.json
+
+      - name: Upload trades
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.tag }}-trades
+          path: /tmp/topstep_contract_sweep/${{ matrix.tag }}/trades.csv

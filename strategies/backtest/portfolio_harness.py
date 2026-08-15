@@ -70,6 +70,7 @@ class PortfolioHarness:
         initial_capital: float = 100_000.0,
         max_drawdown: float | None = None,
         eod_drawdown: float | None = None,
+        max_contracts: int | None = None,
         scratch_root: Path | None = None,
     ):
         combos = combos or WINNERS_COMBOS
@@ -99,6 +100,7 @@ class PortfolioHarness:
                 initial_capital=initial_capital,
                 max_drawdown=max_drawdown,
                 eod_drawdown=eod_drawdown,
+                max_contracts=max_contracts,
                 ledger=self.ledger,
             )
             self.harnesses.append(h)

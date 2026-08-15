@@ -169,6 +169,7 @@ class StrategyHarness:
         initial_capital: float = 100_000.0,
         max_drawdown: float | None = None,
         eod_drawdown: float | None = None,
+        max_contracts: int | None = None,
         ledger: dict | None = None,
     ):
         if strategy not in self.SIGNALS:
@@ -201,6 +202,7 @@ class StrategyHarness:
         # equity is this far below the all-time equity peak.  For Topstep-style
         # rules where intra-day excursion is allowed as long as you recover by EOD.
         self.eod_drawdown = eod_drawdown
+        self.max_contracts = max_contracts
         self._peak_equity = initial_capital
         self._eod_peak_equity = initial_capital
         self._day_realized = 0.0
@@ -569,6 +571,8 @@ class StrategyHarness:
             stop_dist = abs(float(sig["entry_price"]) - sl)
             if stop_dist > 0 and self.point_value > 0:
                 qty = max(1, int((self.risk_pct * self._equity) / (stop_dist * self.point_value)))
+        if self.max_contracts is not None:
+            qty = min(qty, self.max_contracts)
         self._open = {
             "direction": direction,
             "entry_price": sig["entry_price"],
