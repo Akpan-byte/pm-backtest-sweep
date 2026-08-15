@@ -170,6 +170,7 @@ class StrategyHarness:
         max_drawdown: float | None = None,
         eod_drawdown: float | None = None,
         max_contracts: int | None = None,
+        daily_profit_cap: float | None = None,
         ledger: dict | None = None,
     ):
         if strategy not in self.SIGNALS:
@@ -203,6 +204,7 @@ class StrategyHarness:
         # rules where intra-day excursion is allowed as long as you recover by EOD.
         self.eod_drawdown = eod_drawdown
         self.max_contracts = max_contracts
+        self.daily_profit_cap = daily_profit_cap
         self._peak_equity = initial_capital
         self._eod_peak_equity = initial_capital
         self._day_realized = 0.0
@@ -561,6 +563,9 @@ class StrategyHarness:
 
         sig = self.fn(**kwargs)
         if not sig.get("triggered"):
+            return
+        # Daily profit cap: stop opening new trades once day realized PnL hits cap.
+        if self.daily_profit_cap is not None and self._realized_day() >= self.daily_profit_cap:
             return
         direction = 1 if sig["direction"] == "LONG" else -1
         # Position sizing: fixed 1 contract (risk_pct None) or fixed-fractional

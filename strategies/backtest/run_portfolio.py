@@ -83,6 +83,7 @@ def main():
     ap.add_argument("--max-drawdown", type=float, default=None)
     ap.add_argument("--eod-drawdown", type=float, default=None)
     ap.add_argument("--max-contracts", type=int, default=None)
+    ap.add_argument("--daily-profit-cap", type=float, default=None)
     ap.add_argument("--n-mc", type=int, default=2000)
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--start", default="2016-06-01")
@@ -119,6 +120,7 @@ def main():
         max_drawdown=args.max_drawdown,
         eod_drawdown=args.eod_drawdown,
         max_contracts=args.max_contracts,
+        daily_profit_cap=args.daily_profit_cap,
         scratch_root=Path(tempfile.mkdtemp(prefix="portfolio_run_")),
     )
     trades = ph.run()
@@ -166,6 +168,7 @@ def main():
         "max_drawdown": args.max_drawdown,
         "eod_drawdown": args.eod_drawdown,
         "max_contracts": args.max_contracts,
+        "daily_profit_cap": args.daily_profit_cap,
         "start": args.start,
         "end": args.end,
         "n_trades": len(trades),

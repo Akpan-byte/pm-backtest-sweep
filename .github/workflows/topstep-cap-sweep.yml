@@ -1,0 +1,225 @@
+name: Topstep Daily Cap Sweep
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sweep-50k:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 50k: 4 instruments × 3 risk levels × 2 contract tiers × 8 cap levels = 192
+          # Caps to sweep: none, $1k, $2k, $3k, $4k, $6k, $8k, $10k
+          - { instruments: "NQ", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ,YM", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ,YM", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ,YM", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ,YM", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ,YM", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ,YM", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ,ES", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ,ES", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ,ES", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ,ES", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ,ES", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ,ES", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ,ES,YM", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ,ES,YM", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ,ES,YM", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ,ES,YM", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ,ES,YM", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ,ES,YM", risk: 0.02, maxc: 2 }
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install pandas numpy scikit-learn pyarrow
+
+      - name: Download market data
+        run: |
+          mkdir -p /tmp/fvg-market-data
+          for sym in NQ ES YM; do
+            gh release download fvg-data-v1 \
+              -R ${{ github.repository }} \
+              -p "${sym}_1min.csv.zst" \
+              -D /tmp/fvg-market-data
+            zstd -d /tmp/fvg-market-data/${sym}_1min.csv.zst -o /tmp/fvg-market-data/${sym}_1min.csv
+          done
+        env:
+          GH_TOKEN: ${{ github.TOKEN }}
+
+      - name: Run sweep
+        run: |
+          INSTR="${{ matrix.instruments }}"
+          RISK="${{ matrix.risk }}"
+          MAXC="${{ matrix.maxc }}"
+          IC=50000
+          DLL=1000
+          EOD=2000
+
+          # Instrument tag for filename
+          INSTR_TAG=$(echo "$INSTR" | tr ',' '_')
+
+          for CAP in 0 1000 2000 3000 4000 6000 8000 10000; do
+            TAG="50k_${INSTR_TAG}_r${RISK}_c${MAXC}_cap${CAP}"
+            mkdir -p /tmp/topstep_capsweep/${TAG}
+
+            CAP_FLAG=""
+            if [ "$CAP" -gt 0 ]; then
+              CAP_FLAG="--daily-profit-cap $CAP"
+            fi
+
+            python strategies/backtest/run_portfolio.py \
+              --dll $DLL \
+              --risk-pct $RISK \
+              --initial-capital $IC \
+              --eod-drawdown $EOD \
+              --max-contracts $MAXC \
+              $CAP_FLAG \
+              --n-mc 20000 \
+              --n-boot 20000 \
+              --data-root /tmp/fvg-market-data \
+              --instruments "$INSTR" \
+              --tag "$TAG" \
+              --outdir /tmp/topstep_capsweep
+          done
+        env:
+          PYTHONPATH: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: 50k-${{ matrix.instruments }}-r${{ matrix.risk }}-c${{ matrix.maxc }}
+          path: /tmp/topstep_capsweep/50k_*/report.json
+
+      - name: Upload trades
+        uses: actions/upload-artifact@v4
+        with:
+          name: 50k-${{ matrix.instruments }}-r${{ matrix.risk }}-c${{ matrix.maxc }}-trades
+          path: /tmp/topstep_capsweep/50k_*/trades.csv
+
+  sweep-150k:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 150k: 4 instruments × 3 risk levels × 3 contract tiers × 8 cap levels = 288
+          - { instruments: "NQ", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ", risk: 0.005, maxc: 3 }
+          - { instruments: "NQ", risk: 0.01, maxc: 3 }
+          - { instruments: "NQ", risk: 0.02, maxc: 3 }
+          - { instruments: "NQ,YM", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ,YM", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ,YM", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ,YM", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ,YM", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ,YM", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ,YM", risk: 0.005, maxc: 3 }
+          - { instruments: "NQ,YM", risk: 0.01, maxc: 3 }
+          - { instruments: "NQ,YM", risk: 0.02, maxc: 3 }
+          - { instruments: "NQ,ES", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ,ES", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ,ES", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ,ES", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ,ES", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ,ES", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ,ES", risk: 0.005, maxc: 3 }
+          - { instruments: "NQ,ES", risk: 0.01, maxc: 3 }
+          - { instruments: "NQ,ES", risk: 0.02, maxc: 3 }
+          - { instruments: "NQ,ES,YM", risk: 0.005, maxc: 1 }
+          - { instruments: "NQ,ES,YM", risk: 0.01, maxc: 1 }
+          - { instruments: "NQ,ES,YM", risk: 0.02, maxc: 1 }
+          - { instruments: "NQ,ES,YM", risk: 0.005, maxc: 2 }
+          - { instruments: "NQ,ES,YM", risk: 0.01, maxc: 2 }
+          - { instruments: "NQ,ES,YM", risk: 0.02, maxc: 2 }
+          - { instruments: "NQ,ES,YM", risk: 0.005, maxc: 3 }
+          - { instruments: "NQ,ES,YM", risk: 0.01, maxc: 3 }
+          - { instruments: "NQ,ES,YM", risk: 0.02, maxc: 3 }
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install pandas numpy scikit-learn pyarrow
+
+      - name: Download market data
+        run: |
+          mkdir -p /tmp/fvg-market-data
+          for sym in NQ ES YM; do
+            gh release download fvg-data-v1 \
+              -R ${{ github.repository }} \
+              -p "${sym}_1min.csv.zst" \
+              -D /tmp/fvg-market-data
+            zstd -d /tmp/fvg-market-data/${sym}_1min.csv.zst -o /tmp/fvg-market-data/${sym}_1min.csv
+          done
+        env:
+          GH_TOKEN: ${{ github.TOKEN }}
+
+      - name: Run sweep
+        run: |
+          INSTR="${{ matrix.instruments }}"
+          RISK="${{ matrix.risk }}"
+          MAXC="${{ matrix.maxc }}"
+          IC=150000
+          DLL=4500
+          EOD=5000
+
+          INSTR_TAG=$(echo "$INSTR" | tr ',' '_')
+
+          for CAP in 0 2000 4000 6000 8000 10000 15000 20000; do
+            TAG="150k_${INSTR_TAG}_r${RISK}_c${MAXC}_cap${CAP}"
+            mkdir -p /tmp/topstep_capsweep/${TAG}
+
+            CAP_FLAG=""
+            if [ "$CAP" -gt 0 ]; then
+              CAP_FLAG="--daily-profit-cap $CAP"
+            fi
+
+            python strategies/backtest/run_portfolio.py \
+              --dll $DLL \
+              --risk-pct $RISK \
+              --initial-capital $IC \
+              --eod-drawdown $EOD \
+              --max-contracts $MAXC \
+              $CAP_FLAG \
+              --n-mc 20000 \
+              --n-boot 20000 \
+              --data-root /tmp/fvg-market-data \
+              --instruments "$INSTR" \
+              --tag "$TAG" \
+              --outdir /tmp/topstep_capsweep
+          done
+        env:
+          PYTHONPATH: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: 150k-${{ matrix.instruments }}-r${{ matrix.risk }}-c${{ matrix.maxc }}
+          path: /tmp/topstep_capsweep/150k_*/report.json
+
+      - name: Upload trades
+        uses: actions/upload-artifact@v4
+        with:
+          name: 150k-${{ matrix.instruments }}-r${{ matrix.risk }}-c${{ matrix.maxc }}-trades
+          path: /tmp/topstep_capsweep/150k_*/trades.csv

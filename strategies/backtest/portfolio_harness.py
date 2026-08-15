@@ -71,6 +71,7 @@ class PortfolioHarness:
         max_drawdown: float | None = None,
         eod_drawdown: float | None = None,
         max_contracts: int | None = None,
+        daily_profit_cap: float | None = None,
         scratch_root: Path | None = None,
     ):
         combos = combos or WINNERS_COMBOS
@@ -101,6 +102,7 @@ class PortfolioHarness:
                 max_drawdown=max_drawdown,
                 eod_drawdown=eod_drawdown,
                 max_contracts=max_contracts,
+                daily_profit_cap=daily_profit_cap,
                 ledger=self.ledger,
             )
             self.harnesses.append(h)
