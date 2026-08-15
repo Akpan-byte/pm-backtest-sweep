@@ -137,6 +137,7 @@ jobs:
             --max-contracts ${{ matrix.max_contracts }} \
             --n-mc 20000 \
             --n-boot 20000 \
+            --data-root /tmp/fvg-market-data \
             --instruments "${{ matrix.instruments }}" \
             --tag "${{ matrix.tag }}" \
             --outdir /tmp/topstep_contract_sweep
