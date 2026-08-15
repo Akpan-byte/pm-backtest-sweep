@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +37,12 @@ log = logging.getLogger("strategies.backtest.engine")
 
 EST = tu.EST
 UTC = tu.UTC
+
+# Session-gate boundaries, hoisted so the per-bar pre-gates never hit the slow
+# datetime.strptime path (~0.4M calls per 10y portfolio sweep).
+T_0830 = time(8, 30)
+T_1400 = time(14, 0)
+T_0800 = time(8, 0)
 
 # Rolling window sizes (bars) passed to each signal.  Larger than any internal
 # slice the signals use (max internal lookback is 30), so detectors always see
@@ -158,6 +164,10 @@ class StrategyHarness:
         max_reentries: int | None = None,
         scratch_root: Path | None = None,
         hard_exit_1400: bool = True,
+        dll: float | None = None,
+        risk_pct: float | None = None,
+        initial_capital: float = 100_000.0,
+        ledger: dict | None = None,
     ):
         if strategy not in self.SIGNALS:
             raise KeyError(f"unknown strategy {strategy!r}")
@@ -168,6 +178,23 @@ class StrategyHarness:
         self.pip_value = pip_value
         self.max_reentries = max_reentries or self.cfg["max_reentries"]
         self.hard_exit_1400 = hard_exit_1400
+        # Daily loss limit (dollars).  None = disabled.  Enforced at bar level:
+        # realized day PnL + open-position floating PnL may never go below -dll.
+        # `ledger` (optional) is a shared portfolio ledger dict owned by a
+        # PortfolioHarness: {'day', 'day_realized', 'day_halted', 'open_float_others', 'dll'}.
+        # When set, all the day-PnL state is read/written through the ledger so a
+        # portfolio-wide daily loss bucket is enforced across all instruments.
+        self.dll = dll
+        self.ledger = ledger
+        self._ledger = ledger is not None
+        if self._ledger:
+            self.ledger["dll"] = self.dll
+        self.risk_pct = risk_pct
+        self.initial_capital = initial_capital
+        self._day_realized = 0.0
+        self._day_key: datetime | None = None
+        self._day_halted = False
+        self._equity = initial_capital
 
         import importlib
 
@@ -273,6 +300,46 @@ class StrategyHarness:
         self._one_m.append(bar)
 
     # ----- trade simulation -----
+    # Day-state accessors that route through the shared portfolio ledger when a
+    # PortfolioHarness owns this harness.  `open_float_others` is the combined
+    # floating PnL (dollars) of every OTHER open position in the portfolio, set
+    # by the driver before each bar so each instrument's DLL trigger accounts
+    # for concurrent positions on the other symbols.
+    def _realized_day(self) -> float:
+        return self.ledger["day_realized"] if self._ledger else self._day_realized
+
+    def _set_realized_day(self, v: float):
+        if self._ledger:
+            self.ledger["day_realized"] = v
+        else:
+            self._day_realized = v
+
+    def _is_halted(self) -> bool:
+        return self.ledger["day_halted"] if self._ledger else self._day_halted
+
+    def _set_halted(self, v: bool):
+        if self._ledger:
+            self.ledger["day_halted"] = v
+        else:
+            self._day_halted = v
+
+    def _others_float(self) -> float:
+        return self.ledger.get("open_float_others", 0.0) if self._ledger else 0.0
+
+    def _dll_price(self, pos: dict) -> float | None:
+        """Price at which the open position would push day PnL to exactly -dll."""
+        if not self.dll:
+            return None
+        q = pos["qty"]
+        pv = self.point_value
+        # Current day PnL = realized (shared if portfolio) + floating of the
+        # other open portfolio positions + this position's own floating at the
+        # trigger price.  Only this position's term varies with price.
+        base = self._realized_day() + self._others_float()
+        if pos["direction"] == 1:
+            return pos["entry_price"] + (-self.dll - base) / (q * pv)
+        return pos["entry_price"] + (self.dll + base) / (q * pv)
+
     def _try_close(self, bar: dict, et: datetime, last: bool) -> dict | None:
         """Return an exit dict if the open position is stopped/targeted."""
         pos = self._open
@@ -281,18 +348,26 @@ class StrategyHarness:
         direction = pos["direction"]  # +1 long / -1 short
         low, high = bar["low"], bar["high"]
         sl, tp = pos["sl"], pos["tp"]
-        # Conservative: assume the stop is hit first when both are touched.
+        # Daily loss limit: if the bar adverses through the DLL trigger level
+        # before reaching the stop, flatten exactly at the limit.  When both
+        # are touched in one bar the DLL level is reached first only if it sits
+        # on the near side of the stop; otherwise the stop binds first.
+        dllp = self._dll_price(pos)
         if direction == 1:
+            if dllp is not None and dllp > sl and low <= dllp:
+                return {"exit_price": dllp, "reason": "DLL"}
             if low <= sl:
                 return {"exit_price": sl, "reason": "SL"}
             if high >= tp:
                 return {"exit_price": tp, "reason": "TP"}
         else:
+            if dllp is not None and dllp < sl and high >= dllp:
+                return {"exit_price": dllp, "reason": "DLL"}
             if high >= sl:
                 return {"exit_price": sl, "reason": "SL"}
             if low <= tp:
                 return {"exit_price": tp, "reason": "TP"}
-        if self.hard_exit_1400 and self.strategy == "fifteen_min_range_scalp" and et.time() >= datetime.strptime("14:00", "%H:%M").time():
+        if self.hard_exit_1400 and self.strategy == "fifteen_min_range_scalp" and et.time() >= T_1400:
             return {"exit_price": bar["close"], "reason": "HARD_EXIT_1400"}
         if last:
             return {"exit_price": bar["close"], "reason": "END_OF_DATA"}
@@ -302,7 +377,21 @@ class StrategyHarness:
         pos = self._open
         if pos is None:
             return
-        pnl = (exit_price - pos["entry_price"]) * pos["direction"]
+        q = pos["qty"]
+        pnl_points = (exit_price - pos["entry_price"]) * pos["direction"] * q
+        pnl_dollars = pnl_points * self.point_value
+        # Hard daily loss limit: never let cumulative day PnL cross -dll.  If a
+        # closing trade would push the day below the limit, clamp it so the day
+        # lands exactly on -dll (equivalent to the mid-trade DLL cut) and halt.
+        day_before = self._realized_day()
+        if self.dll and pnl_dollars < 0 and day_before + pnl_dollars < -self.dll:
+            pnl_dollars = -self.dll - day_before
+            pnl_points = pnl_dollars / self.point_value
+            reason = "DLL"
+        self._set_realized_day(day_before + pnl_dollars)
+        self._equity += pnl_dollars
+        if self.dll and self._realized_day() <= -self.dll:
+            self._set_halted(True)
         self.trades.append({
             "symbol": self.symbol,
             "strategy": self.strategy,
@@ -314,13 +403,14 @@ class StrategyHarness:
             "take_profit": round(pos["tp"], 6),
             "exit_time": bar["timestamp"],
             "exit_price": round(exit_price, 6),
-            "pnl": round(pnl, 6),
+            "pnl": round(pnl_points, 6),
+            "qty": q,
             "exit_reason": reason,
         })
         if self.cfg.get("trade_history"):
             self._trade_history.append({
                 "id": len(self._trade_history),
-                "profit_loss": pnl,
+                "profit_loss": pnl_points,
             })
             self._trade_history = self._trade_history[-20:]
         self._open = None
@@ -340,54 +430,79 @@ class StrategyHarness:
         self._init_windows()
         with self:
             for i in range(n):
-                ts_ns = int(ts[i])
                 bar = {
-                    "timestamp": datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc),
+                    "timestamp": datetime.fromtimestamp(ts[i] / 1e9, tz=timezone.utc),
                     "open": o[i], "high": h[i], "low": l[i], "close": c[i], "volume": v[i],
                 }
-                self._advance_windows(ts_ns, bar)
-
-                # Maintain Blueprint 2 swing pivots (confirmed on 5m).
-                if self.cfg.get("swings") and len(self._five_m_for_swings) >= 2 * SWING_LAG_5M + 1:
-                    hs, ls = _swing_pivots(self._five_m_for_swings, SWING_LAG_5M)
-                    if hs:
-                        self._swing_highs = (self._swing_highs + hs)[-MAX_SWINGS:]
-                    if ls:
-                        self._swing_lows = (self._swing_lows + ls)[-MAX_SWINGS:]
-
-                # Pre-gates mirroring the signals' session checks so we do not
-                # build per-call kwargs for bars the strategy can never act on.
-                now_utc = bar["timestamp"]
-                now_et = now_utc.astimezone(EST)
-                self.patch.utc = now_utc
-                self.patch.et = now_et
-
-                call = False
-                if self.strategy == "fifteen_min_range_scalp":
-                    call = datetime.strptime("08:30", "%H:%M").time() <= now_et.time() < datetime.strptime("14:00", "%H:%M").time()
-                elif self.strategy == "negative_rr_consolidation_sweeper":
-                    call = True
-                elif self.strategy == "mos_session_daily_draw":
-                    call = now_utc.hour == 0 and now_utc.minute == 0
-                elif self.strategy == "post_8am_bpr_magnet":
-                    call = now_et.time() >= datetime.strptime("08:00", "%H:%M").time()
-
-                # Close existing position (SL/TP/hard-exit) before evaluating
-                # a new entry on the same bar.
-                exit_ = self._try_close(bar, now_et, last=(i == n - 1))
-                if exit_ is not None:
-                    self._close_position(bar, exit_["exit_price"], exit_["reason"])
-
-                if call and self._open is None:
-                    self._eval_signal(bar, now_et, now_utc)
-                else:
-                    # Still allow a same-bar exit on the final iteration even
-                    # if a signal was evaluated (open stays None then anyway).
-                    pass
+                self._step(ts[i], bar, i, last=(i == n - 1))
             # Force-close anything still open at end of data.
             if self._open is not None:
                 self._close_position(self._one_m[-1] if self._one_m else bar, bar["close"], "END_OF_DATA")
         return self.trades
+
+    def _step(self, ts_ns: int, bar: dict, i: int, last: bool):
+        """Advance the harness by one bar.
+
+        Extracted from the run() loop so a PortfolioHarness can drive several
+        instruments in lockstep against one shared daily loss ledger.
+        """
+        self._advance_windows(ts_ns, bar)
+
+        # Maintain Blueprint 2 swing pivots (confirmed on 5m).
+        if self.cfg.get("swings") and len(self._five_m_for_swings) >= 2 * SWING_LAG_5M + 1:
+            hs, ls = _swing_pivots(self._five_m_for_swings, SWING_LAG_5M)
+            if hs:
+                self._swing_highs = (self._swing_highs + hs)[-MAX_SWINGS:]
+            if ls:
+                self._swing_lows = (self._swing_lows + ls)[-MAX_SWINGS:]
+
+        # Pre-gates mirroring the signals' session checks so we do not
+        # build per-call kwargs for bars the strategy can never act on.
+        now_utc = bar["timestamp"]
+        now_et = now_utc.astimezone(EST)
+        self.patch.utc = now_utc
+        self.patch.et = now_et
+        # Re-assert the global time patch for THIS harness.  The patch is a
+        # module-level singleton, so when a PortfolioHarness drives several
+        # instruments each harness must re-install its own patch before every
+        # `_step` or the signal time checks (get_et_now/get_utc_now) would read
+        # whichever harness entered last.
+        tu.get_et_now = lambda: self.patch.et or datetime.now(EST)
+        tu.get_utc_now = lambda: self.patch.utc or datetime.now(UTC)
+
+        call = False
+        if self.strategy == "fifteen_min_range_scalp":
+            call = T_0830 <= now_et.time() < T_1400
+        elif self.strategy == "negative_rr_consolidation_sweeper":
+            call = True
+        elif self.strategy == "mos_session_daily_draw":
+            call = now_utc.hour == 0 and now_utc.minute == 0
+        elif self.strategy == "post_8am_bpr_magnet":
+            call = now_et.time() >= T_0800
+
+        # Daily loss limit day rollover (UTC trading day).  Reset the
+        # realized-day counter and un-halt new entries at midnight UTC.
+        # Standalone runs own their day key; portfolio runs share the ledger's.
+        if self.dll is not None:
+            day_key = bar["timestamp"].date()
+            if self._ledger:
+                if day_key != self.ledger.get("day"):
+                    self.ledger["day"] = day_key
+                    self.ledger["day_realized"] = 0.0
+                    self.ledger["day_halted"] = False
+            elif day_key != self._day_key:
+                self._day_key = day_key
+                self._day_realized = 0.0
+                self._day_halted = False
+
+        # Close existing position (SL/TP/DLL/hard-exit) before evaluating
+        # a new entry on the same bar.
+        exit_ = self._try_close(bar, now_et, last=last)
+        if exit_ is not None:
+            self._close_position(bar, exit_["exit_price"], exit_["reason"])
+
+        if call and self._open is None and not self._is_halted():
+            self._eval_signal(bar, now_et, now_utc)
 
     def _eval_signal(self, bar: dict, now_et: datetime, now_utc: datetime):
         wins = self._windows()
@@ -409,10 +524,19 @@ class StrategyHarness:
         if not sig.get("triggered"):
             return
         direction = 1 if sig["direction"] == "LONG" else -1
+        # Position sizing: fixed 1 contract (risk_pct None) or fixed-fractional
+        # risk sizing where qty = risk_pct*equity / (stop_distance*point_value).
+        qty = 1
+        sl = float(sig["sl"])
+        if self.risk_pct is not None:
+            stop_dist = abs(float(sig["entry_price"]) - sl)
+            if stop_dist > 0 and self.point_value > 0:
+                qty = max(1, int((self.risk_pct * self._equity) / (stop_dist * self.point_value)))
         self._open = {
             "direction": direction,
             "entry_price": sig["entry_price"],
-            "sl": sig["sl"],
+            "sl": sl,
             "tp": sig["tp"],
+            "qty": qty,
             "entry_time": bar["timestamp"],
         }
