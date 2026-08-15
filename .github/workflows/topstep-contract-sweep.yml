@@ -108,12 +108,14 @@ jobs:
 
       - name: Download market data
         run: |
-          gh release download fvg-data-v1 \
-            -R ${{ github.repository }} \
-            -p "fvg-market-data.tar.zst" \
-            -D /tmp
-          zstd -d /tmp/fvg-market-data.tar.zst -o /tmp/fvg-market-data.tar
-          tar xf /tmp/fvg-market-data.tar -C /tmp
+          mkdir -p /tmp/fvg-market-data
+          for sym in NQ ES YM; do
+            gh release download fvg-data-v1 \
+              -R ${{ github.repository }} \
+              -p "${sym}_1min.csv.zst" \
+              -D /tmp/fvg-market-data
+            zstd -d /tmp/fvg-market-data/${sym}_1min.csv.zst -o /tmp/fvg-market-data/${sym}_1min.csv
+          done
         env:
           GH_TOKEN: ${{ github.TOKEN }}
 
