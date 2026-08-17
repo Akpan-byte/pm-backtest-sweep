@@ -158,8 +158,8 @@ def _swing_pivots(bars: list[dict], window: int = 2) -> tuple[list[dict], list[d
     right_low_min = lows.rolling(window=window, min_periods=window).min().shift(-window)
     low_mask = (lows < left_low_min) & (lows < right_low_min)
 
-    swing_highs = [{"bar": bars[i], "index": i} for i in np.flatnonzero(high_mask.values)]
-    swing_lows = [{"bar": bars[i], "index": i} for i in np.flatnonzero(low_mask.values)]
+    swing_highs = [{"bar": bars[i], "index": int(i)} for i in np.flatnonzero(high_mask.values)]
+    swing_lows = [{"bar": bars[i], "index": int(i)} for i in np.flatnonzero(low_mask.values)]
     return swing_highs, swing_lows
 
 
