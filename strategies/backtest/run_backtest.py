@@ -157,7 +157,39 @@ def run_one(
     trades = harness.run(df)
     log.info("%s %s: %d trades in %.1fs", strategy, symbol, len(trades), time.time() - t0)
 
+    def zero_metrics() -> dict:
+        """Return a valid metrics dict when no trades or empty data exist."""
+        return {
+            "basic": {
+                "start_equity": initial_capital,
+                "end_equity": initial_capital,
+                "total_return": 0.0,
+                "cagr": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "max_drawdown_start_index": None,
+                "max_drawdown_end_index": None,
+                "win_rate": 0.0,
+                "n_trades": 0,
+                "n_days": 0,
+            },
+            "probabilistic_sharpe_ratio": 0.0,
+            "deflated_sharpe_ratio": 0.0,
+            "start_of_day_to_trough_drawdown": {"values": [], "max": 0.0},
+            "markov_transition_strength": {
+                "transition_matrix": [[0.0, 0.0], [0.0, 0.0]],
+                "counts": [[0, 0], [0, 0]],
+                "chi2": 0.0,
+                "pvalue": 1.0,
+                "strength": 0.0,
+            },
+            "brownian_motion_test": {"variance_ratio": 0.0, "z_stat": 0.0, "pvalue": 1.0, "q": 5},
+            "bayesian_sharpe": {"mean": 0.0, "median": 0.0, "ci_95": [0.0, 0.0], "samples": []},
+        }
+
     def compute(trades_subset: list[dict]) -> dict:
+        if not trades_subset:
+            return zero_metrics()
         signals = to_signals_df(trades_subset)
         params = {
             "initial_capital": 100_000.0,
@@ -166,11 +198,7 @@ def run_one(
             "commission": 0.0,
             "topstep": {"enabled": False},
         }
-        result = run_backtest(signals, params) if not signals.empty else {
-            "trades": signals, "equity_curve": pd.Series(dtype=float),
-            "daily_returns": pd.Series(dtype=float),
-            "start_of_day_to_trough_drawdown": [], "summary": {},
-        }
+        result = run_backtest(signals, params)
         return calculate_metrics(result, n_mc=n_mc, n_boot=n_boot, random_state=42)
 
     tag = f"{symbol.upper()}_{strategy}"
