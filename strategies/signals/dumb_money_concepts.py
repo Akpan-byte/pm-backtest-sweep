@@ -117,13 +117,18 @@ def _get_zones_and_atr(state: dict, daily_bars: list[dict]) -> tuple[list[dict],
 
     The daily bar window is stable over the course of a trading day, so this
     avoids recomputing the expensive swing-pivot scan on every 1-minute tick.
+
+    The last daily bar is excluded because it is the in-progress day: its
+    open/high/low/close are still changing and using it would repaint levels
+    intraday.
     """
     sig = _daily_signature(daily_bars)
     if state.get("daily_signature") == sig:
         return state["cached_zones"], state["cached_atr"]
 
-    atr = _daily_atr(daily_bars)
-    zones = _level_zones_from_swings(daily_bars) if atr > 0 else []
+    completed = daily_bars[:-1] if len(daily_bars) > 1 else daily_bars
+    atr = _daily_atr(completed)
+    zones = _level_zones_from_swings(completed) if atr > 0 else []
     state["daily_signature"] = sig
     state["cached_zones"] = zones
     state["cached_atr"] = atr
