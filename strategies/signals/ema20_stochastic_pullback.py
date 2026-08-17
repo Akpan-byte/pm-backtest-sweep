@@ -31,6 +31,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
 from ..core import time_utils as tu
 from ..core import candle_utils as cu
 from ..core.state_store import StateStore
@@ -109,31 +111,51 @@ def _stochastic_series(
 
     Returns a list of (slow_k, d) tuples.  The first valid index is
     ``k_period + slowing + d_period - 3``.
+
+    Implemented with NumPy vectorised rolling operations.  The harness calls
+    this on every 1-minute bar, so the pure-Python O(n*k) loop was a major
+    bottleneck; this version stays O(n) with very low constant overhead.
     """
     n = len(bars)
     min_bars = k_period + slowing + d_period - 2
     if n < min_bars:
         return [(None, None)] * n
 
-    fast_k: list[float | None] = [None] * n
-    for i in range(k_period - 1, n):
-        window = bars[i - k_period + 1 : i + 1]
-        lowest = min(c["low"] for c in window)
-        highest = max(c["high"] for c in window)
-        rng = highest - lowest
-        fast_k[i] = 50.0 if rng <= 0 else 100.0 * (bars[i]["close"] - lowest) / rng
+    highs = np.fromiter((b["high"] for b in bars), float, n)
+    lows = np.fromiter((b["low"] for b in bars), float, n)
+    closes = np.fromiter((b["close"] for b in bars), float, n)
 
-    slow_k: list[float | None] = [None] * n
-    for i in range(k_period + slowing - 2, n):
-        vals = fast_k[i - slowing + 1 : i + 1]
-        slow_k[i] = sum(vals) / slowing
+    # Rolling min/max over k_period using a sliding window view.
+    from numpy.lib.stride_tricks import sliding_window_view
+    low_windows = sliding_window_view(lows, k_period)
+    high_windows = sliding_window_view(highs, k_period)
+    lowest = np.concatenate(([np.nan] * (k_period - 1), low_windows.min(axis=1)))
+    highest = np.concatenate(([np.nan] * (k_period - 1), high_windows.max(axis=1)))
 
-    d: list[float | None] = [None] * n
-    for i in range(k_period + slowing + d_period - 3, n):
-        vals = slow_k[i - d_period + 1 : i + 1]
-        d[i] = sum(vals) / d_period
+    rng = highest - lowest
+    fast_k = np.full(n, 50.0)
+    valid_k = rng > 0
+    fast_k[valid_k] = 100.0 * (closes[valid_k] - lowest[valid_k]) / rng[valid_k]
 
-    return list(zip(slow_k, d))
+    # Rolling means for slowing and d_period.
+    slow_k = np.full(n, np.nan)
+    d = np.full(n, np.nan)
+    if n >= k_period + slowing - 1:
+        fk_valid = fast_k[k_period - 1:]
+        slow_windows = sliding_window_view(fk_valid, slowing)
+        slow_vals = slow_windows.mean(axis=1)
+        slow_k[k_period + slowing - 2:] = slow_vals
+    if n >= k_period + slowing + d_period - 2:
+        sk_valid = slow_k[k_period + slowing - 2:]
+        d_windows = sliding_window_view(sk_valid, d_period)
+        d_vals = d_windows.mean(axis=1)
+        d[k_period + slowing + d_period - 3:] = d_vals
+
+    out = [(None, None)] * n
+    valid_start = k_period + slowing + d_period - 3
+    for i in range(valid_start, n):
+        out[i] = (float(slow_k[i]), float(d[i]))
+    return out
 
 
 # ----- setup detection -------------------------------------------------------
