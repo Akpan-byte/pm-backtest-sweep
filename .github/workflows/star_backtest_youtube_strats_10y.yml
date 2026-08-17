@@ -1,0 +1,154 @@
+# CHANGE_SUMMARY
+# 2026-08-17  kilo
+#   - 20-worker parallel StarTrading YouTube-strategy futures backtest on GHA.
+#   - Scenarios: 7 strategies x 8 instruments (NQ, ES, YM, GC, SI, BTC, ETH, SOL)
+#     = 56 scenario tuples, each producing IS (2016-06-01..2023-12-31), OOS
+#     (2024-01-01..2025-12-31), and FULL (2016-06-01..2025-12-31) reports via
+#     run_backtest.py's --oos-start/--oos-end flags.
+#   - Round-robin: worker w runs scenarios i where i % 20 == w.
+#   - Data: 1min CSVs pulled from public Akpan-byte/fvg-backtest-engine
+#     (backtests/data/<SYM>/M1.csv.gz; ts header auto-detected) for all 8 symbols.
+#   - Code: strategies/ from this repo; topstep engine vendored at
+#     strategies/backtest/vendor/topstep_strats; pip installs numpy + pandas +
+#     scipy + scikit-learn for the metrics suite.
+#   - Merge job: downloads worker artifacts, merges 168 manifests/tags
+#     (56 scenarios x 3 windows), and calls strategies/backtest/merge_results.py.
+# WHY: Run all 56 futures backtests (with walk-forward splits) in parallel
+#      instead of sequentially on a closed laptop.
+name: star_backtest_youtube_strats_10y
+
+on:
+  workflow_dispatch:
+
+env:
+  TOTAL_WORKERS: '20'
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - name: Checkout market data repo (1min, 8 instruments)
+        uses: actions/checkout@v4
+        with:
+          repository: Akpan-byte/fvg-backtest-engine
+          path: fvg_execution_engine
+          sparse-checkout: |
+            backtests/data/NQ/M1.csv.gz
+            backtests/data/ES/M1.csv.gz
+            backtests/data/YM/M1.csv.gz
+            backtests/data/GC/M1.csv.gz
+            backtests/data/SI/M1.csv.gz
+            backtests/data/BTC/M1.csv.gz
+            backtests/data/ETH/M1.csv.gz
+            backtests/data/SOL/M1.csv.gz
+          sparse-checkout-cone-mode: false
+
+      - name: Decompress market data
+        run: |
+          mkdir -p market_data
+          for SYM in NQ ES YM GC SI BTC ETH SOL; do
+            gunzip -c fvg_execution_engine/backtests/data/$SYM/M1.csv.gz > market_data/${SYM}_1min.csv
+            head -1 market_data/${SYM}_1min.csv
+            wc -l market_data/${SYM}_1min.csv
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy scikit-learn
+
+      - name: Run assigned scenarios
+        env:
+          WORKER_ID: ${{ matrix.worker_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          PYTHONPATH="${{ github.workspace }}" python3 - <<'PYEOF'
+          import os, subprocess, sys
+
+          STRATS = [
+              "ema20_stochastic_pullback",
+              "sneaky_pivot",
+              "trident_pattern",
+              "rhapsody_crt_msnr",
+              "trade_ats_ma_master",
+              "dumb_money_concepts",
+              "brandontrades_supply_demand",
+          ]
+          SYMBOLS = ["NQ", "ES", "YM", "GC", "SI", "BTC", "ETH", "SOL"]
+          scenarios = [(s, sym) for s in STRATS for sym in SYMBOLS]
+
+          wid = int(os.environ["WORKER_ID"])
+          nwk = int(os.environ.get("TOTAL_WORKERS", "20"))
+          assigned = [sc for i, sc in enumerate(scenarios) if i % nwk == wid]
+          if not assigned:
+              print(f"Worker {wid}: nothing to do"); sys.exit(0)
+          print(f"Worker {wid}: {len(assigned)} scenarios -> {assigned}")
+
+          for strategy, symbol in assigned:
+              cmd = ["python3", "strategies/backtest/run_backtest.py",
+                     "--strategy", strategy, "--symbol", symbol,
+                     "--csv", f"market_data/{symbol}_1min.csv",
+                     "--start", "2016-06-01", "--end", "2023-12-31",
+                     "--oos-start", "2024-01-01", "--oos-end", "2025-12-31",
+                     "--outdir", "results", "--n-mc", "20000", "--n-boot", "20000",
+                     "--scratch", "scratch"]
+              print(f"  RUN: {' '.join(cmd)}")
+              subprocess.run(cmd, check=True)
+          print(f"Worker {wid} done.")
+          PYEOF
+
+      - name: Upload worker results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-youtube-worker-${{ matrix.worker_id }}
+          path: results/
+          retention-days: 30
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: compute
+    timeout-minutes: 30
+    steps:
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy scikit-learn
+
+      - name: Download all worker results
+        uses: actions/download-artifact@v4
+        with:
+          path: all_results/
+          pattern: "star-youtube-worker-*"
+          merge-multiple: true
+
+      - name: Build merged manifest + instrument combos
+        run: |
+          mkdir -p merged
+          PYTHONPATH="${{ github.workspace }}" python3 \
+            strategies/backtest/merge_results.py \
+            --results all_results --outdir merged \
+            --n-mc 2000 --n-boot 2000
+
+      - name: Upload merged report
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-backtest-youtube-strats-10y-report
+          path: merged/
+          retention-days: 30

@@ -1,4 +1,18 @@
 # CHANGE_SUMMARY
+# 2026-08-17  integration-engineer + lead
+#   - Registered seven new StarTrading strategy signals in
+#     StrategyHarness.SIGNALS:
+#       ema20_stochastic_pullback, sneaky_pivot, trident_pattern,
+#       rhapsody_crt_msnr, trade_ats_ma_master, dumb_money_concepts,
+#       brandontrades_supply_demand.
+#   - Added per-strategy session pre-gate branches in _step() matching each
+#     signal's documented time rules (24/7, NY open first 45m, London Killzone).
+#   - Added a dedicated thirty_m_bars rolling window (250 bars) and increased
+#     WINDOW_15M to 400 bars so trident_pattern has enough 30m history for its
+#     200 EMA filter.
+# WHY: Integrate the newly written signal modules into the backtest harness
+#      while keeping the original four strategies untouched.
+#
 # 2026-08-14  coder
 #   - Created strategies/backtest/engine.py: the core bar-by-bar futures
 #     backtest driver for the four StarTrading signals.
@@ -40,16 +54,21 @@ UTC = tu.UTC
 
 # Session-gate boundaries, hoisted so the per-bar pre-gates never hit the slow
 # datetime.strptime path (~0.4M calls per 10y portfolio sweep).
-T_0830 = time(8, 30)
-T_1400 = time(14, 0)
+T_0300 = time(3, 0)
+T_0630 = time(6, 30)
 T_0800 = time(8, 0)
+T_0830 = time(8, 30)
+T_0930 = time(9, 30)
+T_1015 = time(10, 15)
+T_1400 = time(14, 0)
 
 # Rolling window sizes (bars) passed to each signal.  Larger than any internal
 # slice the signals use (max internal lookback is 30), so detectors always see
 # enough history without scanning the whole 10y dataset.
 WINDOW_1M = 600
 WINDOW_5M = 400
-WINDOW_15M = 200
+WINDOW_15M = 400
+WINDOW_30M = 250
 WINDOW_1H = 200
 WINDOW_4H = 200
 WINDOW_1D = 400
@@ -63,7 +82,7 @@ MAX_SWINGS = 30
 
 
 def _period_ns(period: str) -> int:
-    return {"5m": 5 * 60, "15m": 15 * 60, "1h": 3600, "4h": 4 * 3600}[period] * 10**9
+    return {"5m": 5 * 60, "15m": 15 * 60, "30m": 30 * 60, "1h": 3600, "4h": 4 * 3600}[period] * 10**9
 
 
 def _bucket_end_ns(ts_ns: int, period_ns: int) -> int:
@@ -153,6 +172,56 @@ class StrategyHarness:
             "needs": ("one_m_bars", "five_m_bars", "fifteen_m_bars"),
             "pip_value": True,
         },
+        "ema20_stochastic_pullback": {
+            "module": "ema20_stochastic_pullback",
+            "func": "ema20_stochastic_pullback",
+            "source": "EMA20_STOCHASTIC_PULLBACK",
+            "max_reentries": 3,
+            "needs": ("daily_bars", "four_h_bars", "one_m_bars"),
+        },
+        "sneaky_pivot": {
+            "module": "sneaky_pivot",
+            "func": "sneaky_pivot",
+            "source": "SNEAKY_PIVOT",
+            "max_reentries": 3,
+            "needs": ("daily_bars", "fifteen_m_bars"),
+        },
+        "trident_pattern": {
+            "module": "trident_pattern",
+            "func": "trident_pattern",
+            "source": "TRIDENT_PATTERN",
+            "max_reentries": 1,
+            "needs": ("thirty_m_bars", "fifteen_m_bars"),
+            "pip_value": True,
+        },
+        "rhapsody_crt_msnr": {
+            "module": "rhapsody_crt_msnr",
+            "func": "rhapsody_crt_msnr",
+            "source": "RHAPSODY_CRT_MSNR",
+            "max_reentries": 3,
+            "needs": ("daily_bars", "four_h_bars", "fifteen_m_bars"),
+        },
+        "trade_ats_ma_master": {
+            "module": "trade_ats_ma_master",
+            "func": "trade_ats_ma_master",
+            "source": "ATS_MA_MASTER",
+            "max_reentries": 3,
+            "needs": ("daily_bars", "one_h_bars"),
+        },
+        "dumb_money_concepts": {
+            "module": "dumb_money_concepts",
+            "func": "dumb_money_concepts",
+            "source": "DUMB_MONEY_CONCEPTS",
+            "max_reentries": 3,
+            "needs": ("daily_bars", "one_h_bars", "fifteen_m_bars"),
+        },
+        "brandontrades_supply_demand": {
+            "module": "brandontrades_supply_demand",
+            "func": "brandontrades_supply_demand",
+            "source": "BRANDONTRADES_SUPPLY_DEMAND",
+            "max_reentries": 3,
+            "needs": ("five_m_bars", "fifteen_m_bars", "one_h_bars", "four_h_bars"),
+        },
     }
 
     def __init__(
@@ -171,7 +240,10 @@ class StrategyHarness:
         eod_drawdown: float | None = None,
         max_contracts: int | None = None,
         daily_profit_cap: float | None = None,
+        trail_at_tp: bool = False,
+        trail_distance: float | None = None,
         ledger: dict | None = None,
+        session_entry_hour_utc: int = 0,
     ):
         if strategy not in self.SIGNALS:
             raise KeyError(f"unknown strategy {strategy!r}")
@@ -205,6 +277,11 @@ class StrategyHarness:
         self.eod_drawdown = eod_drawdown
         self.max_contracts = max_contracts
         self.daily_profit_cap = daily_profit_cap
+        self.session_entry_hour_utc = session_entry_hour_utc
+        self.trail_at_tp = trail_at_tp
+        # trail_distance: how far to trail stop after TP hit (in points).
+        # None = use original SL distance as the trail distance.
+        self.trail_distance = trail_distance
         self._peak_equity = initial_capital
         self._eod_peak_equity = initial_capital
         self._day_realized = 0.0
@@ -250,6 +327,7 @@ class StrategyHarness:
             "one_m_bars": list(self._one_m),
             "five_m_bars": list(self._five_m),
             "fifteen_m_bars": list(self._fifteen_m),
+            "thirty_m_bars": list(self._thirty_m),
             "one_h_bars": list(self._one_h),
             "four_h_bars": list(self._four_h),
             "daily_bars": list(self._daily),
@@ -259,12 +337,14 @@ class StrategyHarness:
         self._one_m = deque(maxlen=WINDOW_1M)
         self._five_m = deque(maxlen=WINDOW_5M)
         self._fifteen_m = deque(maxlen=WINDOW_15M)
+        self._thirty_m = deque(maxlen=WINDOW_30M)
         self._one_h = deque(maxlen=WINDOW_1H)
         self._four_h = deque(maxlen=WINDOW_4H)
         self._daily = deque(maxlen=WINDOW_1D)
         self._bucket = {
             "5m": {"start": None, "o": None, "h": None, "l": None, "c": None, "v": 0},
             "15m": {"start": None, "o": None, "h": None, "l": None, "c": None, "v": 0},
+            "30m": {"start": None, "o": None, "h": None, "l": None, "c": None, "v": 0},
             "1h": {"start": None, "o": None, "h": None, "l": None, "c": None, "v": 0},
             "4h": {"start": None, "o": None, "h": None, "l": None, "c": None, "v": 0},
             "1d": {"start": None, "o": None, "h": None, "l": None, "c": None, "v": 0},
@@ -284,6 +364,8 @@ class StrategyHarness:
             self._five_m_for_swings.append(d)
         elif tf == "15m":
             self._fifteen_m.append(d)
+        elif tf == "30m":
+            self._thirty_m.append(d)
         elif tf == "1h":
             self._one_h.append(d)
         elif tf == "4h":
@@ -309,7 +391,8 @@ class StrategyHarness:
 
     def _advance_windows(self, bar_ns: int, bar: dict):
         for tf, pn in (("5m", _period_ns("5m")), ("15m", _period_ns("15m")),
-                       ("1h", _period_ns("1h")), ("4h", _period_ns("4h"))):
+                       ("30m", _period_ns("30m")), ("1h", _period_ns("1h")),
+                       ("4h", _period_ns("4h"))):
             end = _bucket_end_ns(bar_ns, pn)
             self._update_bucket(tf, end - pn, end, bar)
         self._update_bucket("1d", _day_end_ns(bar_ns) - 86400 * 10**9, _day_end_ns(bar_ns), bar)
@@ -375,14 +458,45 @@ class StrategyHarness:
             if low <= sl:
                 return {"exit_price": sl, "reason": "SL"}
             if high >= tp:
-                return {"exit_price": tp, "reason": "TP"}
+                if self.trail_at_tp and not pos.get("trailing"):
+                    # TP hit: lock to breakeven, start trailing
+                    trail_dist = self.trail_distance or abs(tp - pos["entry_price"])
+                    pos["sl"] = pos["entry_price"]  # move SL to breakeven
+                    pos["tp"] = 1e18 if direction == 1 else -1e18  # remove TP cap
+                    pos["trailing"] = True
+                    pos["trail_dist"] = trail_dist
+                    pos["trail_peak"] = high
+                elif pos.get("trailing"):
+                    # Update trailing stop
+                    pos["trail_peak"] = max(pos.get("trail_peak", high), high)
+                    pos["sl"] = pos["trail_peak"] - pos["trail_dist"]
+                else:
+                    return {"exit_price": tp, "reason": "TP"}
+            elif pos.get("trailing"):
+                pos["trail_peak"] = max(pos.get("trail_peak", high), high)
+                pos["sl"] = pos["trail_peak"] - pos["trail_dist"]
         else:
             if dllp is not None and dllp < sl and high >= dllp:
                 return {"exit_price": dllp, "reason": "DLL"}
             if high >= sl:
                 return {"exit_price": sl, "reason": "SL"}
             if low <= tp:
-                return {"exit_price": tp, "reason": "TP"}
+                if self.trail_at_tp and not pos.get("trailing"):
+                    # TP hit: lock to breakeven, start trailing
+                    trail_dist = self.trail_distance or abs(tp - pos["entry_price"])
+                    pos["sl"] = pos["entry_price"]  # move SL to breakeven
+                    pos["tp"] = -1e18 if direction == 1 else 1e18  # remove TP cap
+                    pos["trailing"] = True
+                    pos["trail_dist"] = trail_dist
+                    pos["trail_peak"] = low
+                elif pos.get("trailing"):
+                    pos["trail_peak"] = min(pos.get("trail_peak", low), low)
+                    pos["sl"] = pos["trail_peak"] + pos["trail_dist"]
+                else:
+                    return {"exit_price": tp, "reason": "TP"}
+            elif pos.get("trailing"):
+                pos["trail_peak"] = min(pos.get("trail_peak", low), low)
+                pos["sl"] = pos["trail_peak"] + pos["trail_dist"]
         if self.hard_exit_1400 and self.strategy == "fifteen_min_range_scalp" and et.time() >= T_1400:
             return {"exit_price": bar["close"], "reason": "HARD_EXIT_1400"}
         if last:
@@ -497,9 +611,23 @@ class StrategyHarness:
         elif self.strategy == "negative_rr_consolidation_sweeper":
             call = True
         elif self.strategy == "mos_session_daily_draw":
-            call = now_utc.hour == 0 and now_utc.minute == 0
+            call = now_utc.hour == self.session_entry_hour_utc and now_utc.minute == 0
         elif self.strategy == "post_8am_bpr_magnet":
             call = now_et.time() >= T_0800
+        elif self.strategy == "ema20_stochastic_pullback":
+            call = True
+        elif self.strategy == "sneaky_pivot":
+            call = T_0930 <= now_et.time() <= T_1015
+        elif self.strategy == "trident_pattern":
+            call = T_0300 <= now_et.time() <= T_0630
+        elif self.strategy == "rhapsody_crt_msnr":
+            call = True
+        elif self.strategy == "trade_ats_ma_master":
+            call = True
+        elif self.strategy == "dumb_money_concepts":
+            call = True
+        elif self.strategy == "brandontrades_supply_demand":
+            call = True
 
         # Daily loss limit day rollover (UTC trading day).  Reset the
         # realized-day counter and un-halt new entries at midnight UTC.
@@ -560,6 +688,8 @@ class StrategyHarness:
             kwargs["trade_history"] = self._trade_history
         if self.cfg.get("pip_value"):
             kwargs["pip_value"] = self.pip_value
+        if self.strategy == "mos_session_daily_draw":
+            kwargs["session_entry_hour_utc"] = self.session_entry_hour_utc
 
         sig = self.fn(**kwargs)
         if not sig.get("triggered"):

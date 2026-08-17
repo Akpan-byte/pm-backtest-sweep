@@ -6,8 +6,17 @@
 #     (20k MC/bootstrap), and writes trades CSV + metrics JSON per (strategy,
 #     symbol). Trades carry a `symbol` column so instrument combos can be built
 #     by merging trade files without re-running signals.
-# WHY: Production entry point for the 12 individual backtests (4 strategies x
-#      3 instruments) run on GHA + Akpan laptop, plus small-slice validation.
+# 2026-08-17  kilo
+#   - Expanded symbol universe and CLI to support the 7 YouTube strategy signals
+#     across 8 instruments (NQ, ES, YM, GC, SI, BTC, ETH, SOL).
+#   - Added --oos-start / --oos-end arguments (default 2024-01-01..2025-12-31).
+#     When --oos-start is supplied, each (strategy, symbol) is run three times:
+#     IS, OOS, and FULL, producing tags {SYM}_{strategy}_IS/_OOS/_FULL.
+#     When omitted, only the IS window is run for backward compatibility.
+#   - Confirmed risk_pct defaults to None so the harness trades one contract
+#     per signal unless explicit fractional sizing is requested.
+# WHY: Production entry point for the 56 individual backtests (7 strategies x
+#      8 instruments) with IS/OOS/FULL walk-forward splits.
 """CLI for running the StarTrading futures backtest harness."""
 
 from __future__ import annotations
@@ -35,7 +44,17 @@ from topstep_strats.metrics import calculate_metrics  # noqa: E402
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("run_backtest")
 
-POINT_VALUES = {"NQ": 20.0, "ES": 50.0, "YM": 5.0}
+POINT_VALUES = {
+    "NQ": 20.0, "ES": 50.0, "YM": 5.0,
+    "GC": 10.0, "SI": 25.0,
+    "BTC": 1.0, "ETH": 1.0, "SOL": 1.0,
+}
+
+DEFAULT_PIP_VALUES = {
+    "NQ": 1.0, "ES": 0.2, "YM": 2.0,
+    "GC": 10.0, "SI": 0.5,
+    "BTC": 100.0, "ETH": 10.0, "SOL": 1.0,
+}
 
 
 def load_1m(csv: str, start: str, end: str) -> pd.DataFrame:
@@ -111,6 +130,10 @@ def run_one(
     initial_capital: float = 100_000.0,
     max_drawdown: float | None = None,
     eod_drawdown: float | None = None,
+    trail_at_tp: bool = False,
+    trail_distance: float | None = None,
+    session_entry_hour_utc: int = 0,
+    tag_suffix: str | None = None,
 ) -> dict:
     point_value = POINT_VALUES[symbol.upper()]
     df = load_1m(csv, start, end)
@@ -127,6 +150,9 @@ def run_one(
         initial_capital=initial_capital,
         max_drawdown=max_drawdown,
         eod_drawdown=eod_drawdown,
+        trail_at_tp=trail_at_tp,
+        trail_distance=trail_distance,
+        session_entry_hour_utc=session_entry_hour_utc,
     )
     trades = harness.run(df)
     log.info("%s %s: %d trades in %.1fs", strategy, symbol, len(trades), time.time() - t0)
@@ -148,6 +174,8 @@ def run_one(
         return calculate_metrics(result, n_mc=n_mc, n_boot=n_boot, random_state=42)
 
     tag = f"{symbol.upper()}_{strategy}"
+    if tag_suffix:
+        tag = f"{tag}_{tag_suffix}"
     full_metrics = compute(trades)
     trades_path, metrics_path = save_result(outdir, tag, trades, full_metrics)
 
@@ -171,6 +199,9 @@ def run_one(
         "symbol": symbol.upper(),
         "point_value": point_value,
         "pip_value": pip_value,
+        "window": tag_suffix or "IS",
+        "start": start,
+        "end": end,
         "trades": str(trades_path),
         "metrics": str(metrics_path),
         "n_trades": len(trades),
@@ -189,20 +220,27 @@ def run_one(
 def main():
     ap = argparse.ArgumentParser(description="StarTrading futures backtest harness")
     ap.add_argument("--strategy", choices=list(StrategyHarness.SIGNALS), help="strategy; omit for all")
-    ap.add_argument("--symbol", required=True, choices=["NQ", "ES", "YM"])
+    ap.add_argument("--symbol", required=True,
+                     choices=["NQ", "ES", "YM", "GC", "SI", "BTC", "ETH", "SOL"])
     ap.add_argument("--csv", required=True, help="path to 1m OHLCV csv")
     ap.add_argument("--start", default="2016-06-01", help="in-sample start (UTC)")
     ap.add_argument("--end", default="2023-12-31", help="in-sample end (UTC)")
+    ap.add_argument("--oos-start", default=None, help="out-of-sample start (UTC); triggers IS+OOS+FULL runs")
+    ap.add_argument("--oos-end", default="2025-12-31", help="out-of-sample end (UTC)")
     ap.add_argument("--outdir", default="/tmp/opencode/star_bt", help="output dir")
     ap.add_argument("--n-mc", type=int, default=20000)
     ap.add_argument("--n-boot", type=int, default=20000)
-    ap.add_argument("--pip-value", type=float, default=1.0)
+    ap.add_argument("--pip-value", type=float, default=None,
+                     help="price units per pip; default varies by symbol")
     ap.add_argument("--max-reentries", type=int, default=None)
     ap.add_argument("--dll", type=float, default=None, help="daily loss limit in $ (hard mid-trade cut, then halt for the day)")
     ap.add_argument("--risk-pct", type=float, default=None, help="fixed-fractional risk per trade (qty from stop distance); None=1 contract")
     ap.add_argument("--initial-capital", type=float, default=100_000.0)
     ap.add_argument("--max-drawdown", type=float, default=None, help="intra-day trailing drawdown limit in $ (Apex/E2T style)")
     ap.add_argument("--eod-drawdown", type=float, default=None, help="end-of-day trailing drawdown limit in $ (Topstep style)")
+    ap.add_argument("--trail-at-tp", action="store_true", default=False, help="when TP hit, move SL to breakeven and trail instead of closing")
+    ap.add_argument("--trail-distance", type=float, default=None, help="trail distance in points after TP hit (default: TP distance)")
+    ap.add_argument("--session-entry-hour-utc", type=int, default=0, help="entry hour in UTC for mos_session_daily_draw (0=MOS, 5=Asian, 7=London)")
     ap.add_argument(
         "--scratch",
         default=tempfile.mkdtemp(prefix="strategies_run_"),
@@ -210,24 +248,40 @@ def main():
         " date-keyed state leaks between runs and alters entries)",
     )
     args = ap.parse_args()
+    if args.pip_value is None:
+        args.pip_value = DEFAULT_PIP_VALUES.get(args.symbol, 1.0)
 
     outdir = Path(args.outdir)
     scratch = Path(args.scratch)
     strategies = [args.strategy] if args.strategy else list(StrategyHarness.SIGNALS)
 
+    if args.oos_start:
+        windows = [
+            (args.start, args.end, "IS"),
+            (args.oos_start, args.oos_end, "OOS"),
+            (args.start, args.oos_end, "FULL"),
+        ]
+    else:
+        windows = [(args.start, args.end, None)]
+
     manifest = []
     t_total = time.time()
     for strategy in strategies:
-        res = run_one(
-            strategy, args.symbol, args.csv, args.start, args.end, outdir,
-            args.n_mc, args.n_boot, args.pip_value, args.max_reentries, scratch,
-            dll=args.dll, risk_pct=args.risk_pct, initial_capital=args.initial_capital,
-            max_drawdown=args.max_drawdown, eod_drawdown=args.eod_drawdown,
-        )
-        manifest.append(res)
-        print(f"[{res['symbol']}/{res['strategy']}] trades={res['n_trades']} "
-              f"(rth={res['n_rth']} over={res['n_overnight']}) wr={res['win_rate']:.3f} "
-              f"cagr={res['cagr']:.3f} sharpe={res['sharpe']:.2f} maxdd={res['max_drawdown']:.3f}")
+        for start, end, suffix in windows:
+            res = run_one(
+                strategy, args.symbol, args.csv, start, end, outdir,
+                args.n_mc, args.n_boot, args.pip_value, args.max_reentries, scratch,
+                dll=args.dll, risk_pct=args.risk_pct, initial_capital=args.initial_capital,
+                max_drawdown=args.max_drawdown, eod_drawdown=args.eod_drawdown,
+                trail_at_tp=args.trail_at_tp, trail_distance=args.trail_distance,
+                session_entry_hour_utc=args.session_entry_hour_utc,
+                tag_suffix=suffix,
+            )
+            manifest.append(res)
+            print(f"[{res['tag']}] {res['start']}..{res['end']} "
+                  f"trades={res['n_trades']} (rth={res['n_rth']} over={res['n_overnight']}) "
+                  f"wr={res['win_rate']:.3f} cagr={res['cagr']:.3f} "
+                  f"sharpe={res['sharpe']:.2f} maxdd={res['max_drawdown']:.3f}")
     with open(outdir / "manifest.json", "w") as fh:
         json.dump(manifest, fh, indent=2, default=str)
     print(f"done in {time.time() - t_total:.1f}s -> {outdir}")

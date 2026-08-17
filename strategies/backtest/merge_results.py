@@ -26,19 +26,33 @@ sys.path.insert(0, os.environ.get("TOPSTEP_STRATS_DIR", "/config/topstep-strats"
 from topstep_strats.backtest import run_backtest  # noqa: E402
 from topstep_strats.metrics import calculate_metrics  # noqa: E402
 
-POINT_VALUES = {"NQ": 20.0, "ES": 50.0, "YM": 5.0}
+POINT_VALUES = {
+    "NQ": 20.0, "ES": 50.0, "YM": 5.0,
+    "GC": 10.0, "SI": 25.0,
+    "BTC": 1.0, "ETH": 1.0, "SOL": 1.0,
+}
 
 COMBOS = {
-    "all": ["NQ", "ES", "YM"],
-    "equity": ["NQ", "ES"],
-    "index": ["NQ", "YM"],
-    "micro": ["ES", "YM"],
+    "all": ["NQ", "ES", "YM", "GC", "SI", "BTC", "ETH", "SOL"],
+    "equity_futures": ["NQ", "ES", "YM"],
+    "metals": ["GC", "SI"],
+    "crypto": ["BTC", "ETH", "SOL"],
+    "nq_es": ["NQ", "ES"],
+    "nq_ym": ["NQ", "YM"],
+    "es_ym": ["ES", "YM"],
 }
 
 
 def load_metrics(path) -> dict:
     with open(path) as fh:
         return json.load(fh)
+
+
+def _window_suffix(tag: str) -> str:
+    for suffix in ("_IS", "_OOS", "_FULL"):
+        if tag.endswith(suffix):
+            return suffix.lstrip("_")
+    return "SINGLE"
 
 
 def compute_combo(df: pd.DataFrame, n_mc: int, n_boot: int) -> dict:
@@ -109,38 +123,44 @@ def main():
             "total_return": m["basic"].get("total_return"),
         }
 
-    # Load all core trades for combo recomputation.
+    # Load all core trades for combo recomputation, grouped by window suffix.
     trades_files = sorted(glob.glob(str(results / "*_trades.csv")))
     core_trades = [p for p in trades_files
                    if not any(x in Path(p).stem for x in ("_rth_", "_overnight_"))]
-    frames = []
+    trades_by_window: dict[str, list[pd.DataFrame]] = {}
     for p in core_trades:
+        tag = Path(p).stem.replace("_trades", "")
+        window = _window_suffix(tag)
         try:
-            frames.append(pd.read_csv(p))
+            trades_by_window.setdefault(window, []).append(pd.read_csv(p))
         except pd.errors.EmptyDataError:
             continue
-    all_trades = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-    combos = compute_combo(all_trades, args.n_mc, args.n_boot)
+    combos_by_window = {}
+    for window, frames in trades_by_window.items():
+        all_trades = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        combos_by_window[window] = compute_combo(all_trades, args.n_mc, args.n_boot)
 
-    report = {"manifest": manifest, "combos": combos}
+    report = {"manifest": manifest, "combos_by_window": combos_by_window}
     with open(out / "star_backtest_results.json", "w") as fh:
         json.dump(report, fh, indent=2, default=str)
 
-    lines = ["# StarTrading 12-Backtest Results (2016-06-01..2023-12-31)\n"]
-    lines.append("| strategy | symbol | trades | win_rate | cagr | sharpe | maxDD | total_ret |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines = ["# StarTrading YouTube Strategies Backtest Results\n"]
+    lines.append("| tag | trades | win_rate | cagr | sharpe | maxDD | total_ret |")
+    lines.append("|---|---|---|---|---|---|---|")
     for tag, m in manifest.items():
         lines.append(f"| {tag} | {m['n_trades']} | {m['win_rate']:.3f} | {m['cagr']:.3f} "
                      f"| {m['sharpe']:.2f} | {m['max_drawdown']:.3f} | {m['total_return']:.3f} |")
-    lines.append("\n## Instrument Combos\n")
-    lines.append("| combo | symbols | win_rate | cagr | sharpe | maxDD | total_ret |")
-    lines.append("|---|---|---|---|---|---|---|")
-    for name, m in combos.items():
-        b = m["basic"]
-        lines.append(f"| {name} | {','.join(COMBOS[name])} | {b.get('win_rate', 0):.3f} "
-                     f"| {b.get('cagr', 0):.3f} | {b.get('sharpe_ratio', 0):.2f} "
-                     f"| {b.get('max_drawdown', 0):.3f} | {b.get('total_return', 0):.3f} |")
+    for window, combos in combos_by_window.items():
+        lines.append(f"\n## Instrument Combos — {window}\n")
+        lines.append("| combo | symbols | trades | win_rate | cagr | sharpe | maxDD | total_ret |")
+        lines.append("|---|---|---|---|---|---|---|---|")
+        for name, m in combos.items():
+            b = m["basic"]
+            lines.append(f"| {name} | {','.join(COMBOS[name])} | {b.get('n_trades', 0)} "
+                         f"| {b.get('win_rate', 0):.3f} | {b.get('cagr', 0):.3f} "
+                         f"| {b.get('sharpe_ratio', 0):.2f} | {b.get('max_drawdown', 0):.3f} "
+                         f"| {b.get('total_return', 0):.3f} |")
     with open(out / "star_backtest_results.md", "w") as fh:
         fh.write("\n".join(lines))
 
