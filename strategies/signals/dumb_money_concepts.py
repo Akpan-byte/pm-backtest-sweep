@@ -66,20 +66,33 @@ SOURCE = "DUMB_MONEY_CONCEPTS"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 store = StateStore("dumb_money_concepts", _PROJECT_ROOT)
 
-# Proximity buffer: a "test" of a level is counted if price comes within this
-# fraction of the recent daily ATR.  This keeps the level relevant for a zone
-# rather than an exact tick.
-LEVEL_TEST_ATR_FRAC = 0.25
+# Tunable parameters for the sweep.  External sweep runners can mutate this
+# dict before each run; the signal functions read from it on every call.
+_PARAMS = {
+    "level_test_atr_frac": 0.25,
+    "retest_atr_frac": 0.15,
+    "min_daily_bars": 10,
+    "sl_buffer_frac": 0.10,
+    "swing_window": 2,
+    "rejection_strictness": "body",   # "body" | "wick"
+    "target_type": "origin",          # "origin" | "level_mid" | "fixed_0.5r" | "fixed_1r" | "fixed_2r"
+    "one_test_rule": True,
+}
 
-# Re-test buffer: after a rejection, entry is allowed if price is back within
-# this fraction of ATR from the level.
-RETEST_ATR_FRAC = 0.15
 
-# Minimum recent daily bars needed to find reliable swing structure.
-MIN_DAILY_BARS = 10
+def set_params(params: dict):
+    """Replace the active parameter set. Used by sweep runners."""
+    _PARAMS.clear()
+    _PARAMS.update(params)
 
-# Default structural stop buffer as a fraction of the level-to-origin distance.
-SL_BUFFER_FRAC = 0.10
+
+def reset_state():
+    """Clear persisted state between independent sweep configs/runs."""
+    store._mem.clear()
+
+
+def _p(key, default=None):
+    return _PARAMS.get(key, default)
 
 
 def _make_state():
@@ -170,7 +183,7 @@ def _level_zones_from_swings(daily_bars: list[dict]) -> list[dict]:
     level price used for proximity tests is the body mid-point; the zone high
     and low bound the rejection test.
     """
-    highs, lows = _swing_pivots(daily_bars, window=2)
+    highs, lows = _swing_pivots(daily_bars, window=_p("swing_window", 2))
     zones = []
     for h in highs:
         b = h["bar"]
@@ -207,7 +220,7 @@ def _nearest_untested_level(zones: list[dict], price: float, tested: list[tuple]
         if round(z["mid"], 2) in tested_prices:
             continue
         dist = abs(price - z["mid"]) / max(atr, 1e-9)
-        if dist <= LEVEL_TEST_ATR_FRAC:
+        if dist <= _p("level_test_atr_frac", 0.25):
             candidates.append((dist, z))
     if not candidates:
         return None
@@ -220,26 +233,32 @@ def _nearest_untested_level(zones: list[dict], price: float, tested: list[tuple]
 def _detect_rejection_at_level(level: dict, one_h_bars: list[dict]) -> bool:
     """True if the latest 1h candle rejected the level.
 
-    RESISTANCE (SHORT): candle high pierced above the level but body closed
-    back below the level mid, leaving a clear upper wick.
+    Strictness:
+      "body": candle must close beyond the level body (current default).
+      "wick": candle must only wick beyond the level body and close back
+              inside the body range.
 
-    SUPPORT (LONG): candle low pierced below the level but body closed back
-    above the level mid, leaving a clear lower wick.
+    RESISTANCE (SHORT): price pierced above the level and closed back below.
+    SUPPORT (LONG): price pierced below the level and closed back above.
     """
     if not one_h_bars:
         return False
     c = one_h_bars[-1]
-    body_mid = (c["open"] + c["close"]) / 2.0
     level_mid = level["mid"]
+    strict = _p("rejection_strictness", "body")
 
     if level["type"] == "RESISTANCE":
-        # Wick above resistance and close below the level mid.
+        if strict == "wick":
+            # Wick pierced above the zone but close remained inside the body.
+            return c["high"] >= level["high"] and c["close"] <= level["high"] and c["close"] >= level["low"]
+        # Body strictness: close below level mid (original behaviour).
         if c["high"] >= level["high"] and c["close"] < level_mid:
             return True
-        # Close past and immediate regain on the same candle.
         if c["open"] > level["high"] and c["close"] < level_mid:
             return True
     else:  # SUPPORT
+        if strict == "wick":
+            return c["low"] <= level["low"] and c["close"] >= level["low"] and c["close"] <= level["high"]
         if c["low"] <= level["low"] and c["close"] > level_mid:
             return True
         if c["open"] < level["low"] and c["close"] > level_mid:
@@ -248,7 +267,7 @@ def _detect_rejection_at_level(level: dict, one_h_bars: list[dict]) -> bool:
 
 
 def _is_retesting_level(level: dict, spot_price: float, atr: float) -> bool:
-    return abs(spot_price - level["mid"]) / max(atr, 1e-9) <= RETEST_ATR_FRAC
+    return abs(spot_price - level["mid"]) / max(atr, 1e-9) <= _p("retest_atr_frac", 0.15)
 
 
 def _find_origin_target(level: dict, zones: list[dict], daily_bars: list[dict]) -> float | None:
@@ -284,13 +303,14 @@ def _sl_beyond_level(level: dict, daily_bars: list[dict], zones: list[dict]) -> 
     For resistance: above the swing high of the level candle plus buffer.
     For support: below the swing low of the level candle plus buffer.
     """
+    sl_frac = _p("sl_buffer_frac", 0.10)
     if level["type"] == "RESISTANCE":
         base = level.get("swing_high", level["high"])
-        buffer_ = max(0.5, (base - level["mid"]) * SL_BUFFER_FRAC)
+        buffer_ = max(0.5, (base - level["mid"]) * sl_frac)
         return base + buffer_
     else:
         base = level.get("swing_low", level["low"])
-        buffer_ = max(0.5, (level["mid"] - base) * SL_BUFFER_FRAC)
+        buffer_ = max(0.5, (level["mid"] - base) * sl_frac)
         return base - buffer_
 
 
@@ -303,6 +323,7 @@ def dumb_money_concepts(
     daily_bars=None,
     one_h_bars=None,
     fifteen_m_bars=None,
+    point_value=20.0,
     **kwargs,
 ):
     ok, reason = validate_signal_inputs(spot_price, asset)
@@ -311,7 +332,7 @@ def dumb_money_concepts(
 
     now = tu.get_et_now()
     today = now.date()
-    if not (daily_bars and len(daily_bars) >= MIN_DAILY_BARS):
+    if not (daily_bars and len(daily_bars) >= _p("min_daily_bars", 10)):
         return no_signal("missing_daily_bars", SOURCE)
 
     key = store.make_key(asset, today, max_reentries)
@@ -346,15 +367,49 @@ def dumb_money_concepts(
             return no_signal("max_reentries", SOURCE)
 
         if _is_retesting_level(level, spot_price, atr):
-            target = pending["target"]
             sl = pending["sl"]
             entry_price = spot_price
+            target_type = pending.get("target_type", "origin")
+            origin_target = pending.get("origin_target", pending["target"])
+
+            if target_type == "origin":
+                target = pending["target"]
+            elif target_type == "level_mid":
+                target = level["mid"]
+            elif target_type.startswith("dollar_"):
+                # Dollar target per contract: convert $ amount to points.
+                dollars = float(target_type.split("_")[1])
+                points = dollars / max(point_value, 1e-9)
+                if direction == "LONG":
+                    target = entry_price + points
+                else:
+                    target = entry_price - points
+            else:
+                # fixed_R targets: entry +/- R * |entry - sl|
+                risk = abs(entry_price - sl)
+                mult = {"fixed_0.25r": 0.25, "fixed_0.33r": 0.33, "fixed_0.5r": 0.5,
+                        "fixed_0.75r": 0.75, "fixed_1r": 1.0, "fixed_1.5r": 1.5,
+                        "fixed_2r": 2.0, "fixed_3r": 3.0}.get(target_type, 1.0)
+                if direction == "LONG":
+                    target = entry_price + risk * mult
+                else:
+                    target = entry_price - risk * mult
+
+            # Sanity-check direction for non-fixed targets.
+            if target_type in ("origin", "level_mid"):
+                if direction == "SHORT" and target >= entry_price:
+                    state["pending_retest"] = None
+                    return no_signal("invalid_target_at_entry", SOURCE)
+                if direction == "LONG" and target <= entry_price:
+                    state["pending_retest"] = None
+                    return no_signal("invalid_target_at_entry", SOURCE)
 
             state["entry_count"][direction] += 1
             state["cooldown"][direction] = MIN_COOLDOWN_TICKS
             state["last_entry_time"] = now
             state["pending_retest"] = None
-            state["tested_levels"].append((level["mid"], direction, now.isoformat()))
+            if _p("one_test_rule", True):
+                state["tested_levels"].append((level["mid"], direction, now.isoformat()))
             store.save(key, state)
 
             return {
@@ -376,13 +431,14 @@ def dumb_money_concepts(
                 ),
             }
         # Rejection expired if price moved far away without retesting.
-        if abs(spot_price - level["mid"]) / max(atr, 1e-9) > LEVEL_TEST_ATR_FRAC * 2.0:
+        if abs(spot_price - level["mid"]) / max(atr, 1e-9) > _p("level_test_atr_frac", 0.25) * 2.0:
             state["pending_retest"] = None
             store.save(key, state)
         return no_signal("awaiting_retest", SOURCE)
 
     # No pending setup: look for a fresh test + rejection of an untested level.
-    level = _nearest_untested_level(zones, spot_price, tested, atr)
+    tested_for_lookup = tested if _p("one_test_rule", True) else []
+    level = _nearest_untested_level(zones, spot_price, tested_for_lookup, atr)
     if level is None:
         return no_signal("no_untested_level", SOURCE)
 
@@ -394,15 +450,20 @@ def dumb_money_concepts(
     if not _detect_rejection_at_level(level, ltf_bars):
         return no_signal("no_rejection", SOURCE)
 
-    target = _find_origin_target(level, zones, daily_bars)
-    if target is None:
+    origin_target = _find_origin_target(level, zones, daily_bars)
+    if origin_target is None:
         return no_signal("no_origin_target", SOURCE)
 
-    # For a SHORT the target must be below entry; for LONG it must be above.
-    if level["direction"] == "SHORT" and target >= level["mid"]:
-        return no_signal("invalid_target", SOURCE)
-    if level["direction"] == "LONG" and target <= level["mid"]:
-        return no_signal("invalid_target", SOURCE)
+    # Validate origin target direction; fixed-R targets are validated at entry.
+    target_type = _p("target_type", "origin")
+    if target_type == "origin":
+        target = origin_target
+        if level["direction"] == "SHORT" and target >= level["mid"]:
+            return no_signal("invalid_target", SOURCE)
+        if level["direction"] == "LONG" and target <= level["mid"]:
+            return no_signal("invalid_target", SOURCE)
+    else:
+        target = None  # computed at entry time
 
     sl = _sl_beyond_level(level, daily_bars, zones)
 
@@ -412,6 +473,8 @@ def dumb_money_concepts(
         "level": level,
         "direction": level["direction"],
         "target": target,
+        "origin_target": origin_target,
+        "target_type": target_type,
         "sl": sl,
         "rejection_time": now.isoformat(),
     }

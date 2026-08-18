@@ -1,0 +1,174 @@
+# CHANGE_SUMMARY
+# 2026-08-18  kilo
+#   - Created .github/workflows/dmc_param_sweep.yml: 20-worker GitHub Actions
+#     sweep of dumb_money_concepts parameters on the IS window (2016-06-01..
+#     2023-12-31) for NQ/ES/YM. Each worker runs a slice of the (config, symbol)
+#     grid and uploads per-config trades + metrics. A merge job builds a summary
+#     CSV and reports the top configs by win rate and prop-payout score.
+# WHY: Run the DMC optimization on GitHub Actions compute rather than the local VM.
+
+name: dmc_param_sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: 'Comma-separated symbols to sweep'
+        required: true
+        default: 'NQ,ES,YM'
+      start:
+        description: 'In-sample start (UTC)'
+        required: true
+        default: '2016-06-01'
+      end:
+        description: 'In-sample end (UTC)'
+        required: true
+        default: '2023-12-31'
+
+env:
+  TOTAL_WORKERS: '20'
+
+jobs:
+  compute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - name: Checkout market data repo (NQ, ES, YM 1min)
+        uses: actions/checkout@v4
+        with:
+          repository: Akpan-byte/fvg-backtest-engine
+          path: fvg_execution_engine
+          sparse-checkout: |
+            backtests/data/NQ/M1.csv.gz
+            backtests/data/ES/M1.csv.gz
+            backtests/data/YM/M1.csv.gz
+          sparse-checkout-cone-mode: false
+
+      - name: Decompress market data
+        run: |
+          mkdir -p market_data
+          for SYM in NQ ES YM; do
+            gunzip -c fvg_execution_engine/backtests/data/$SYM/M1.csv.gz > market_data/${SYM}_1min.csv
+            head -1 market_data/${SYM}_1min.csv
+            wc -l market_data/${SYM}_1min.csv
+          done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy scikit-learn
+
+      - name: Run assigned sweep jobs
+        env:
+          WORKER_ID: ${{ matrix.worker_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          PYTHONPATH="${{ github.workspace }}" python3 - <<'PYEOF'
+          import hashlib, itertools, json, os, subprocess, sys
+          from pathlib import Path
+
+          SYMBOLS = [s.strip().upper() for s in "${{ github.event.inputs.symbols }}".split(",")]
+          START = "${{ github.event.inputs.start }}"
+          END = "${{ github.event.inputs.end }}"
+
+          PARAM_GRID = {
+              "level_test_atr_frac": [0.10, 0.20, 0.30],
+              "retest_atr_frac": [0.05, 0.10, 0.15],
+              "sl_buffer_frac": [0.05, 0.10, 0.20],
+              "swing_window": [2, 3],
+              "rejection_strictness": ["body", "wick"],
+              "target_type": [
+                  "origin", "level_mid",
+                  "fixed_0.25r", "fixed_0.33r", "fixed_0.5r", "fixed_0.75r",
+                  "fixed_1r", "fixed_1.5r", "fixed_2r", "fixed_3r",
+                  "dollar_25", "dollar_50", "dollar_75", "dollar_100", "dollar_150",
+                  "dollar_200", "dollar_300", "dollar_500", "dollar_750", "dollar_1000",
+              ],
+              "one_test_rule": [True, False],
+          }
+
+          keys = list(PARAM_GRID.keys())
+          combos = list(itertools.product(*[PARAM_GRID[k] for k in keys]))
+          jobs = []
+          for combo in combos:
+              params = dict(zip(keys, combo))
+              cfg_id = hashlib.sha1(json.dumps(params, sort_keys=True, default=str).encode()).hexdigest()[:8]
+              for sym in SYMBOLS:
+                  jobs.append((sym, cfg_id, params))
+
+          wid = int(os.environ["WORKER_ID"])
+          nwk = int(os.environ.get("TOTAL_WORKERS", "20"))
+          assigned = [j for i, j in enumerate(jobs) if i % nwk == wid]
+          if not assigned:
+              print(f"Worker {wid}: nothing to do"); sys.exit(0)
+          print(f"Worker {wid}: {len(assigned)} jobs")
+
+          for sym, cfg_id, params in assigned:
+              params_json = json.dumps(params, default=str)
+              cmd = [
+                  "python3", "strategies/backtest/dmc_sweep_single.py",
+                  "--symbol", sym,
+                  "--csv", f"market_data/{sym}_1min.csv",
+                  "--start", START,
+                  "--end", END,
+                  "--config-id", cfg_id,
+                  "--params", params_json,
+                  "--outdir", "results",
+                  "--n-mc", "2000",
+                  "--n-boot", "2000",
+              ]
+              subprocess.run(cmd, check=True)
+          print(f"Worker {wid} done.")
+          PYEOF
+
+      - name: Upload worker results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmc-sweep-worker-${{ matrix.worker_id }}
+          path: results/
+          retention-days: 30
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: compute
+    timeout-minutes: 30
+    steps:
+      - name: Checkout strategy repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install numpy pandas scipy scikit-learn
+
+      - name: Download all worker results
+        uses: actions/download-artifact@v4
+        with:
+          path: all_results/
+          pattern: "dmc-sweep-worker-*"
+          merge-multiple: true
+
+      - name: Build merged summary
+        run: |
+          mkdir -p merged
+          PYTHONPATH="${{ github.workspace }}" python3 strategies/backtest/dmc_merge_sweep.py --results all_results --outdir merged
+
+      - name: Upload merged report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dmc-param-sweep-report
+          path: merged/
+          retention-days: 30

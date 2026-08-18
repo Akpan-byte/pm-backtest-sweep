@@ -20,10 +20,14 @@ from .fifteen_min_range_scalp import fifteen_min_range_scalp
 from .negative_rr_consolidation_sweeper import negative_rr_consolidation_sweeper
 from .mos_session_daily_draw import mos_session_daily_draw
 from .post_8am_bpr_magnet import post_8am_bpr_magnet
+from .orb_vwap import orb_vwap
+from .vwap_sd_reversion import vwap_sd_reversion
 
 __all__ = [
     "fifteen_min_range_scalp",
     "negative_rr_consolidation_sweeper",
     "mos_session_daily_draw",
     "post_8am_bpr_magnet",
+    "orb_vwap",
+    "vwap_sd_reversion",
 ]

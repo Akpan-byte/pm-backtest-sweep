@@ -60,7 +60,12 @@ T_0800 = time(8, 0)
 T_0830 = time(8, 30)
 T_0930 = time(9, 30)
 T_1015 = time(10, 15)
+T_1000 = time(10, 0)
 T_1400 = time(14, 0)
+T_1530 = time(15, 30)
+T_1545 = time(15, 45)
+T_1550 = time(15, 50)
+T_1555 = time(15, 55)
 
 # Rolling window sizes (bars) passed to each signal.  Larger than any internal
 # slice the signals use (max internal lookback is 30), so detectors always see
@@ -221,6 +226,20 @@ class StrategyHarness:
             "source": "BRANDONTRADES_SUPPLY_DEMAND",
             "max_reentries": 3,
             "needs": ("five_m_bars", "fifteen_m_bars", "one_h_bars", "four_h_bars"),
+        },
+        "orb_vwap": {
+            "module": "orb_vwap",
+            "func": "orb_vwap",
+            "source": "ORB_VWAP",
+            "max_reentries": 0,
+            "needs": ("one_m_bars",),
+        },
+        "vwap_sd_reversion": {
+            "module": "vwap_sd_reversion",
+            "func": "vwap_sd_reversion",
+            "source": "VWAP_SD_REVERSION",
+            "max_reentries": 0,
+            "needs": ("one_m_bars",),
         },
     }
 
@@ -499,6 +518,10 @@ class StrategyHarness:
                 pos["sl"] = pos["trail_peak"] + pos["trail_dist"]
         if self.hard_exit_1400 and self.strategy == "fifteen_min_range_scalp" and et.time() >= T_1400:
             return {"exit_price": bar["close"], "reason": "HARD_EXIT_1400"}
+        if self.strategy == "orb_vwap" and et.time() >= T_1555:
+            return {"exit_price": bar["close"], "reason": "FLATTEN_1555"}
+        if self.strategy == "vwap_sd_reversion" and et.time() >= T_1550:
+            return {"exit_price": bar["close"], "reason": "FLATTEN_1550"}
         if last:
             return {"exit_price": bar["close"], "reason": "END_OF_DATA"}
         return None
@@ -628,6 +651,10 @@ class StrategyHarness:
             call = True
         elif self.strategy == "brandontrades_supply_demand":
             call = True
+        elif self.strategy == "orb_vwap":
+            call = T_0930 <= now_et.time() <= T_1545
+        elif self.strategy == "vwap_sd_reversion":
+            call = T_1000 <= now_et.time() <= T_1530
 
         # Daily loss limit day rollover (UTC trading day).  Reset the
         # realized-day counter and un-halt new entries at midnight UTC.
@@ -679,6 +706,7 @@ class StrategyHarness:
             spot_price=bar["close"],
             asset=self.symbol,
             max_reentries=self.max_reentries,
+            point_value=self.point_value,
         )
         for k in self.cfg["needs"]:
             kwargs[k] = wins[k]
